@@ -528,6 +528,7 @@ jobs:
                       "diff",
                       "--cached",
                       "--quiet"
+                   ]           
                   )
 
               if result.returncode == 0:
