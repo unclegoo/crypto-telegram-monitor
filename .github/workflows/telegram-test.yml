@@ -61,25 +61,13 @@ jobs:
           BITGET_URL = "https://api.bitget.com/api/v3/market/candles"
 
           # News
-          NEWS_FEEDS = [
-    (
-        "РБК",
-        "https://rssexport.rbc.ru/rbcnews/news/30/full.rss",
-    ),
-    (
-        "Investing.com",
-        "https://ru.investing.com/rss/news_301.rss",
-    ),
-    (
-        "ForkLog",
-        "https://forklog.com/feed",
-    ),
-    (
-        "Bits.media",
-        "https://bits.media/feed",
-    ),
+        
+  NEWS_FEEDS = [
+    ("РБК", "https://rssexport.rbc.ru/rbcnews/news/30/full.rss"),
+    ("Investing.com", "https://ru.investing.com/rss/news_301.rss"),
+    ("ForkLog", "https://forklog.com/feed"),
+    ("Bits.media", "https://bits.media/feed"),
 ]
-      
     
 
           NEWS_LOOKBACK_HOURS = 2
