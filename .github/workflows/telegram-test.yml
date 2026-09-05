@@ -62,15 +62,25 @@ jobs:
 
           # News
           NEWS_FEEDS = [
-              (
-                  "CoinDesk",
-                  "https://www.coindesk.com/arc/outboundfeeds/rss/"
-              ),
-              (
-                  "Cointelegraph",
-                  "https://cointelegraph.com/?format=rss"
-              ),
-          ]
+    (
+        "РБК",
+        "https://rssexport.rbc.ru/rbcnews/news/30/full.rss",
+    ),
+    (
+        "Investing.com",
+        "https://ru.investing.com/rss/news_301.rss",
+    ),
+    (
+        "ForkLog",
+        "https://forklog.com/feed",
+    ),
+    (
+        "Bits.media",
+        "https://bits.media/feed",
+    ),
+]
+      
+    
 
           NEWS_LOOKBACK_HOURS = 2
           MAX_NEWS_ALERTS_PER_RUN = 3
