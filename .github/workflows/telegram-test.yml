@@ -61,13 +61,20 @@ jobs:
           BITGET_URL = "https://api.bitget.com/api/v3/market/candles"
 
           # News
-        
-          NEWS_FEEDS = [("РБК", "https://rssexport.rbc.ru/rbcnews/news/30/full.rss"),
-          ("Investing.com", "https://ru.investing.com/rss/news_301.rss"),
-          ("ForkLog", "https://forklog.com/feed"),
-    
+          NEWS_FEEDS = [
+              (
+                  "РБК",
+                  "https://rssexport.rbc.ru/rbcnews/news/30/full.rss"
+              ),
+              (
+                  "Investing.com",
+                  "https://ru.investing.com/rss/news_301.rss"
+              ),
+              (
+                  "ForkLog",
+                  "https://forklog.com/feed"
+              ),
           ]
-    
 
           NEWS_LOOKBACK_HOURS = 2
           MAX_NEWS_ALERTS_PER_RUN = 3
@@ -77,9 +84,21 @@ jobs:
           ALERT_COOLDOWN_MINUTES = 60
 
           # Price thresholds
-          EXTREME_60 = 12.0
+
+          # 5-minute alerts
+          SHARP_5 = 3.0
+          STRONG_5 = 5.0
+          VERY_STRONG_5 = 8.0
+          EXTREME_5 = 10.0
+
+          # 30-minute alerts
           STRONG_30 = 8.0
+
+          # 60-minute alerts
           SHARP_60 = 5.0
+          EXTREME_60 = 12.0
+
+          # Volume
           ABNORMAL_VOLUME_RATIO = 3.0
           ABNORMAL_VOLUME_MOVE = 3.0
 
@@ -368,7 +387,9 @@ jobs:
               )
 
               with urllib.request.urlopen(request, timeout=timeout) as response:
-                  return json.loads(response.read().decode("utf-8"))
+                  return json.loads(
+                      response.read().decode("utf-8")
+                  )
 
 
           def http_get_text(url, timeout=20):
@@ -389,12 +410,17 @@ jobs:
           # ============================================================
 
           def telegram_api(method, payload=None):
-              url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/{method}"
+              url = (
+                  f"https://api.telegram.org/"
+                  f"bot{TELEGRAM_BOT_TOKEN}/{method}"
+              )
 
               data = None
 
               if payload is not None:
-                  data = urllib.parse.urlencode(payload).encode("utf-8")
+                  data = urllib.parse.urlencode(
+                      payload
+                  ).encode("utf-8")
 
               request = urllib.request.Request(
                   url,
@@ -404,8 +430,13 @@ jobs:
                   }
               )
 
-              with urllib.request.urlopen(request, timeout=20) as response:
-                  return json.loads(response.read().decode("utf-8"))
+              with urllib.request.urlopen(
+                  request,
+                  timeout=20
+              ) as response:
+                  return json.loads(
+                      response.read().decode("utf-8")
+                  )
 
 
           def get_chat_id():
@@ -457,7 +488,11 @@ jobs:
                   }
 
               try:
-                  with open(STATE_FILE, "r", encoding="utf-8") as f:
+                  with open(
+                      STATE_FILE,
+                      "r",
+                      encoding="utf-8"
+                  ) as f:
                       raw = json.load(f)
 
                   # Migration from previous version
@@ -480,7 +515,11 @@ jobs:
 
 
           def save_state(state):
-              with open(STATE_FILE, "w", encoding="utf-8") as f:
+              with open(
+                  STATE_FILE,
+                  "w",
+                  encoding="utf-8"
+              ) as f:
                   json.dump(
                       state,
                       f,
@@ -525,8 +564,8 @@ jobs:
                       "diff",
                       "--cached",
                       "--quiet"
-                   ]           
-                  )
+                  ]
+              )
 
               if result.returncode == 0:
                   return
@@ -565,7 +604,9 @@ jobs:
                       item["sent_at"]
                   )
 
-                  now = datetime.now(timezone.utc)
+                  now = datetime.now(
+                      timezone.utc
+                  )
 
                   age = (
                       now - sent_at
@@ -579,7 +620,9 @@ jobs:
 
           def mark_alert_sent(state, fingerprint):
               state["alerts"][fingerprint] = {
-                  "sent_at": datetime.now(timezone.utc).isoformat()
+                  "sent_at": datetime.now(
+                      timezone.utc
+                  ).isoformat()
               }
 
 
@@ -611,7 +654,9 @@ jobs:
                   )
 
               # Bitget normally returns newest first.
-              candles = list(reversed(candles))
+              candles = list(
+                  reversed(candles)
+              )
 
               closes = [
                   float(c[4])
@@ -631,8 +676,18 @@ jobs:
 
               price_now = closes[-1]
 
+              # 5 minutes
+              price_5 = closes[-2]
+
+              # 30 minutes
               price_30 = closes[-7]
+
+              # 60 minutes
               price_60 = closes[-13]
+
+              change_5 = (
+                  (price_now / price_5) - 1
+              ) * 100
 
               change_30 = (
                   (price_now / price_30) - 1
@@ -642,18 +697,25 @@ jobs:
                   (price_now / price_60) - 1
               ) * 100
 
-              current_volume = sum(volumes[-6:])
-              previous_volume = sum(volumes[-12:-6])
+              current_volume = sum(
+                  volumes[-6:]
+              )
+
+              previous_volume = sum(
+                  volumes[-12:-6]
+              )
 
               if previous_volume > 0:
                   volume_ratio = (
-                      current_volume / previous_volume
+                      current_volume
+                      / previous_volume
                   )
               else:
                   volume_ratio = 0
 
               return {
                   "price": price_now,
+                  "change_5": change_5,
                   "change_30": change_30,
                   "change_60": change_60,
                   "volume_ratio": volume_ratio,
@@ -690,14 +752,18 @@ jobs:
               value = value.strip()
 
               try:
-                  dt = parsedate_to_datetime(value)
+                  dt = parsedate_to_datetime(
+                      value
+                  )
 
                   if dt.tzinfo is None:
                       dt = dt.replace(
                           tzinfo=timezone.utc
                       )
 
-                  return dt.astimezone(timezone.utc)
+                  return dt.astimezone(
+                      timezone.utc
+                  )
 
               except Exception:
                   pass
@@ -717,7 +783,9 @@ jobs:
                           tzinfo=timezone.utc
                       )
 
-                  return dt.astimezone(timezone.utc)
+                  return dt.astimezone(
+                      timezone.utc
+                  )
 
               except Exception:
                   return None
@@ -730,7 +798,9 @@ jobs:
                       NEWS_TIMEOUT
                   )
 
-                  root = ET.fromstring(raw)
+                  root = ET.fromstring(
+                      raw
+                  )
 
               except Exception as e:
                   print(
@@ -741,7 +811,9 @@ jobs:
               articles = []
 
               # RSS
-              for item in root.findall(".//item"):
+              for item in root.findall(
+                  ".//item"
+              ):
                   title = clean_text(
                       item.findtext("title")
                   )
@@ -817,7 +889,11 @@ jobs:
                               "alternate"
                           )
 
-                          if href and rel == "alternate":
+                          if (
+                              href
+                              and
+                              rel == "alternate"
+                          ):
                               link = href
                               break
 
@@ -845,10 +921,20 @@ jobs:
                       date_text = ""
 
                       if published_node is not None:
-                          date_text = published_node.text or ""
+                          date_text = (
+                              published_node.text
+                              or ""
+                          )
 
-                      if not date_text and updated_node is not None:
-                          date_text = updated_node.text or ""
+                      if (
+                          not date_text
+                          and
+                          updated_node is not None
+                      ):
+                          date_text = (
+                              updated_node.text
+                              or ""
+                          )
 
                       published = parse_date(
                           date_text
@@ -875,7 +961,10 @@ jobs:
                   + article["summary"]
               ).lower()
 
-              title = article["title"].lower()
+              title = (
+                  article["title"]
+                  .lower()
+              )
 
               matches = []
 
@@ -930,7 +1019,11 @@ jobs:
               ).hexdigest()
 
 
-          def format_news(article, coins, signal):
+          def format_news(
+              article,
+              coins,
+              signal
+          ):
               coins_text = ", ".join(
                   f"${coin}"
                   for coin in coins
@@ -1047,9 +1140,17 @@ jobs:
 
               sent_count = 0
 
-              for article, coins, signal, fingerprint in candidates:
+              for (
+                  article,
+                  coins,
+                  signal,
+                  fingerprint
+              ) in candidates:
 
-                  if sent_count >= MAX_NEWS_ALERTS_PER_RUN:
+                  if (
+                      sent_count
+                      >= MAX_NEWS_ALERTS_PER_RUN
+                  ):
                       break
 
                   message = format_news(
@@ -1069,7 +1170,9 @@ jobs:
                       )
 
                       if success:
-                          state["news"][fingerprint] = {
+                          state["news"][
+                              fingerprint
+                          ] = {
                               "sent_at": now.isoformat(),
                               "title": article["title"],
                           }
@@ -1092,11 +1195,18 @@ jobs:
               ):
                   try:
                       sent_at = datetime.fromisoformat(
-                          state["news"][fingerprint]["sent_at"]
+                          state["news"][fingerprint][
+                              "sent_at"
+                          ]
                       )
 
-                      if sent_at < retention_cutoff:
-                          del state["news"][fingerprint]
+                      if (
+                          sent_at
+                          < retention_cutoff
+                      ):
+                          del state["news"][
+                              fingerprint
+                          ]
 
                   except Exception:
                       pass
@@ -1113,11 +1223,15 @@ jobs:
                   "🚀 UNCLE GOO CRYPTO MONITOR\n\n"
                   "Telegram works!\n\n"
                   "✅ Price monitor\n"
+                  "✅ 5-minute price monitor\n"
+                  "✅ 30-minute price monitor\n"
+                  "✅ 60-minute price monitor\n"
                   "✅ Volume monitor\n"
                   "✅ Alert deduplication\n"
                   "✅ News monitor\n"
-                  "✅ CoinDesk\n"
-                  "✅ Cointelegraph\n\n"
+                  "✅ РБК\n"
+                  "✅ Investing.com\n"
+                  "✅ ForkLog\n\n"
                   "⏱ Monitor interval: 5 minutes"
               )
 
@@ -1144,9 +1258,11 @@ jobs:
           print(
               "=============================="
           )
+
           print(
               "UNCLE GOO CRYPTO MONITOR"
           )
+
           print(
               "=============================="
           )
@@ -1162,6 +1278,10 @@ jobs:
                       symbol
                   )
 
+                  change_5 = market[
+                      "change_5"
+                  ]
+
                   change_30 = market[
                       "change_30"
                   ]
@@ -1176,6 +1296,7 @@ jobs:
 
                   print(
                       f"{symbol}: "
+                      f"5m={change_5:+.2f}% "
                       f"30m={change_30:+.2f}% "
                       f"60m={change_60:+.2f}% "
                       f"volume={volume_ratio:.1f}x"
@@ -1183,21 +1304,71 @@ jobs:
 
                   alerts = []
 
+                  # ----------------------------------------------------
+                  # 5 MINUTE ALERTS
+                  # ----------------------------------------------------
+
+                  if abs(change_5) >= EXTREME_5:
+                      alerts.append(
+                          (
+                              "EXTREME",
+                              change_5,
+                              "5m"
+                          )
+                      )
+
+                  elif abs(change_5) >= VERY_STRONG_5:
+                      alerts.append(
+                          (
+                              "VERY_STRONG",
+                              change_5,
+                              "5m"
+                          )
+                      )
+
+                  elif abs(change_5) >= STRONG_5:
+                      alerts.append(
+                          (
+                              "STRONG",
+                              change_5,
+                              "5m"
+                          )
+                      )
+
+                  elif abs(change_5) >= SHARP_5:
+                      alerts.append(
+                          (
+                              "SHARP",
+                              change_5,
+                              "5m"
+                          )
+                      )
+
+
+                  # ----------------------------------------------------
+                  # 30 MINUTE ALERT
+                  # ----------------------------------------------------
+
+                  if abs(change_30) >= STRONG_30:
+                      alerts.append(
+                          (
+                              "STRONG",
+                              change_30,
+                              "30m"
+                          )
+                      )
+
+
+                  # ----------------------------------------------------
+                  # 60 MINUTE ALERTS
+                  # ----------------------------------------------------
+
                   if abs(change_60) >= EXTREME_60:
                       alerts.append(
                           (
                               "EXTREME",
                               change_60,
                               "60m"
-                          )
-                      )
-
-                  elif abs(change_30) >= STRONG_30:
-                      alerts.append(
-                          (
-                              "STRONG",
-                              change_30,
-                              "30m"
                           )
                       )
 
@@ -1210,12 +1381,17 @@ jobs:
                           )
                       )
 
+
+                  # ----------------------------------------------------
+                  # ABNORMAL VOLUME
+                  # ----------------------------------------------------
+
                   if (
-                      volume_ratio >=
-                      ABNORMAL_VOLUME_RATIO
+                      volume_ratio
+                      >= ABNORMAL_VOLUME_RATIO
                       and
-                      abs(change_60) >=
-                      ABNORMAL_VOLUME_MOVE
+                      abs(change_60)
+                      >= ABNORMAL_VOLUME_MOVE
                   ):
                       alerts.append(
                           (
@@ -1225,7 +1401,16 @@ jobs:
                           )
                       )
 
-                  for level, change, period in alerts:
+
+                  # ----------------------------------------------------
+                  # SEND PRICE ALERTS
+                  # ----------------------------------------------------
+
+                  for (
+                      level,
+                      change,
+                      period
+                  ) in alerts:
 
                       direction = (
                           "UP"
@@ -1249,12 +1434,16 @@ jobs:
                           emoji = "🚨"
                           title = "EXTREME MOVE"
 
-                      elif level == "STRONG":
+                      elif level == "VERY_STRONG":
                           emoji = "🔴"
+                          title = "VERY STRONG MOVE"
+
+                      elif level == "STRONG":
+                          emoji = "🟠"
                           title = "STRONG MOVE"
 
                       elif level == "SHARP":
-                          emoji = "🟠"
+                          emoji = "🟡"
                           title = "SHARP MOVE"
 
                       else:
@@ -1315,15 +1504,21 @@ jobs:
           # SAVE STATE
           # ------------------------------------------------------------
 
-          if alerts_sent > 0 or news_sent > 0:
+          if (
+              alerts_sent > 0
+              or
+              news_sent > 0
+          ):
               save_state(state)
 
               try:
                   save_state_to_github()
+
               except Exception as e:
                   print(
                       f"State git save error: {e}"
                   )
+
 
           print(
               "\n=============================="
@@ -1337,7 +1532,11 @@ jobs:
               f"News alerts sent: {news_sent}"
           )
 
-          if alerts_sent == 0 and news_sent == 0:
+          if (
+              alerts_sent == 0
+              and
+              news_sent == 0
+          ):
               print(
                   "No alerts."
               )
