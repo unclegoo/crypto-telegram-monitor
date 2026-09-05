@@ -37,8 +37,6 @@ jobs:
           python3 <<'PY'
           import os
           import json
-          import time
-          import hashlib
           import re
           import subprocess
           import urllib.request
@@ -57,33 +55,26 @@ jobs:
 
           STATE_FILE = ".crypto_monitor_state.json"
 
-          # Market
-          BITGET_URL = "https://api.bitget.com/api/v3/market/candles"
+          BITGET_CANDLES_URL = "https://api.bitget.com/api/v3/market/candles"
+          BITGET_TICKER_URL = "https://api.bitget.com/api/v3/market/tickers"
 
-          # News
           NEWS_FEEDS = [
-              (
-                  "РБК",
-                  "https://rssexport.rbc.ru/rbcnews/news/30/full.rss"
-              ),
-              (
-                  "Investing.com",
-                  "https://ru.investing.com/rss/news_301.rss"
-              ),
-              (
-                  "ForkLog",
-                  "https://forklog.com/feed"
-              ),
+              ("РБК", "https://rssexport.rbc.ru/rbcnews/news/30/full.rss"),
+              ("Investing.com", "https://ru.investing.com/rss/news_301.rss"),
+              ("ForkLog", "https://forklog.com/feed"),
           ]
 
           NEWS_LOOKBACK_HOURS = 2
           MAX_NEWS_ALERTS_PER_RUN = 3
           NEWS_TIMEOUT = 20
 
-          # Alert cooldown
+          # One identical alert per direction/level per hour.
           ALERT_COOLDOWN_MINUTES = 60
 
-          # Price thresholds
+
+          # ============================================================
+          # PRICE ALERT LEVELS
+          # ============================================================
 
           # 5-minute alerts
           SHARP_5 = 3.0
@@ -91,14 +82,12 @@ jobs:
           VERY_STRONG_5 = 8.0
           EXTREME_5 = 10.0
 
-          # 30-minute alerts
+          # 30-minute / 60-minute backup alerts
           STRONG_30 = 8.0
-
-          # 60-minute alerts
           SHARP_60 = 5.0
           EXTREME_60 = 12.0
 
-          # Volume
+          # Abnormal volume
           ABNORMAL_VOLUME_RATIO = 3.0
           ABNORMAL_VOLUME_MOVE = 3.0
 
@@ -140,120 +129,120 @@ jobs:
           NEWS_KEYWORDS = {
               "BTC": [
                   "bitcoin",
-                  "btc"
+                  "btc",
+                  "биткоин",
+                  "биткойн",
               ],
-
               "ETH": [
                   "ethereum",
                   "ether",
-                  "eth"
+                  "eth",
+                  "эфириум",
+                  "эфир",
               ],
-
               "XRP": [
                   "xrp",
-                  "ripple"
+                  "ripple",
+                  "рипл",
               ],
-
               "ETC": [
-                  "ethereum classic"
+                  "ethereum classic",
+                  "ethereum classic",
+                  "etc",
               ],
-
               "FIL": [
-                  "filecoin"
+                  "filecoin",
+                  "file coin",
+                  "fil",
               ],
-
               "ETHFI": [
                   "ether.fi",
                   "etherfi",
-                  "ethfi"
+                  "ethfi",
               ],
-
               "ONDO": [
                   "ondo finance",
-                  "ondo"
+                  "ondo",
               ],
-
               "TWT": [
                   "trust wallet",
                   "trustwallet",
-                  "twt"
+                  "twt",
               ],
-
               "XLM": [
                   "stellar",
-                  "xlm"
+                  "xlm",
+                  "стеллар",
               ],
-
               "ARKM": [
                   "arkham",
-                  "arkm"
+                  "arkm",
               ],
-
               "GRAM": [
                   "gram token",
                   "gram cryptocurrency",
-                  "gram crypto"
+                  "gram crypto",
+                  "gram",
               ],
-
               "STRK": [
                   "starknet",
-                  "strk"
+                  "strk",
               ],
-
               "ARB": [
-                  "arbitrum"
+                  "arbitrum",
+                  "арбітрум",
+                  "arb",
               ],
-
               "STX": [
-                  "stacks"
+                  "stacks",
+                  "stx",
               ],
-
               "RENDER": [
                   "render network",
-                  "render token"
+                  "render token",
+                  "render",
               ],
-
               "JUP": [
                   "jupiter exchange",
                   "jupiter crypto",
-                  "jupiter"
+                  "jupiter",
               ],
-
               "PYTH": [
                   "pyth network",
-                  "pyth"
+                  "pyth",
               ],
-
               "FET": [
                   "fetch.ai",
                   "fetch ai",
-                  "artificial superintelligence alliance"
+                  "artificial superintelligence alliance",
+                  "asi",
+                  "fet",
               ],
-
               "PEPE": [
                   "pepe coin",
                   "pepe token",
-                  "pepe crypto"
+                  "pepe crypto",
+                  "pepe",
               ],
-
               "MANTA": [
                   "manta network",
-                  "manta"
+                  "manta",
               ],
-
               "ZK": [
                   "zksync",
-                  "zk sync"
+                  "zk sync",
+                  "zk",
               ],
-
               "HYPE": [
-                  "hyperliquid"
+                  "hyperliquid",
+                  "hype",
               ],
           }
 
 
           # ============================================================
-          # IMPORTANT NEWS SIGNALS
+          # NEWS SIGNALS
+          # Listing/delisting and token unlocks intentionally removed.
           # ============================================================
 
           NEWS_SIGNALS = [
@@ -275,22 +264,18 @@ jobs:
                       "security flaw",
                       "funds stolen",
                       "network halted",
+                      "взлом",
+                      "взломали",
+                      "эксплойт",
+                      "уязвимость",
+                      "украдены",
+                      "атак",
+                      "атака",
+                      "скомпрометирован",
+                      "украл",
+                      "краж",
                   ],
               ),
-
-              (
-                  "🔴 LISTING / DELISTING",
-                  [
-                      "listing",
-                      "listed",
-                      "delisting",
-                      "delisted",
-                      "trading support",
-                      "adds support",
-                      "removed from",
-                  ],
-              ),
-
               (
                   "⚖️ REGULATION",
                   [
@@ -306,20 +291,15 @@ jobs:
                       "banned",
                       "approval",
                       "etf",
+                      "регулятор",
+                      "регулирован",
+                      "суд",
+                      "иск",
+                      "запрет",
+                      "разрешение",
+                      "одобрение",
                   ],
               ),
-
-              (
-                  "🔓 TOKEN UNLOCK",
-                  [
-                      "token unlock",
-                      "unlock",
-                      "unlocks",
-                      "vesting",
-                      "tokens released",
-                  ],
-              ),
-
               (
                   "🏦 INSTITUTIONAL",
                   [
@@ -329,9 +309,11 @@ jobs:
                       "etf",
                       "treasury",
                       "fund",
+                      "институцион",
+                      "инвестфонд",
+                      "фонд",
                   ],
               ),
-
               (
                   "💰 FUNDING / INVESTMENT",
                   [
@@ -342,9 +324,13 @@ jobs:
                       "raised",
                       "financing",
                       "capital",
+                      "финансирован",
+                      "инвестици",
+                      "инвестор",
+                      "раунд",
+                      "капитал",
                   ],
               ),
-
               (
                   "🤝 PARTNERSHIP",
                   [
@@ -353,9 +339,12 @@ jobs:
                       "partners",
                       "integration",
                       "collaboration",
+                      "партнер",
+                      "партнёр",
+                      "интеграци",
+                      "сотрудничеств",
                   ],
               ),
-
               (
                   "🚀 NETWORK UPDATE",
                   [
@@ -366,6 +355,13 @@ jobs:
                       "launch",
                       "released",
                       "release",
+                      "обновлен",
+                      "обновление",
+                      "хардфорк",
+                      "мейннет",
+                      "тестнет",
+                      "запуск",
+                      "релиз",
                   ],
               ),
           ]
@@ -383,13 +379,11 @@ jobs:
                   url,
                   headers={
                       "User-Agent": "Uncle-Goo-Crypto-Monitor/1.0"
-                  }
+                  },
               )
 
               with urllib.request.urlopen(request, timeout=timeout) as response:
-                  return json.loads(
-                      response.read().decode("utf-8")
-                  )
+                  return json.loads(response.read().decode("utf-8"))
 
 
           def http_get_text(url, timeout=20):
@@ -398,7 +392,7 @@ jobs:
                   headers={
                       "User-Agent": "Mozilla/5.0 Uncle-Goo-Crypto-Monitor/1.0",
                       "Accept": "application/rss+xml, application/xml, text/xml, */*",
-                  }
+                  },
               )
 
               with urllib.request.urlopen(request, timeout=timeout) as response:
@@ -410,6 +404,10 @@ jobs:
           # ============================================================
 
           def telegram_api(method, payload=None):
+              if not TELEGRAM_BOT_TOKEN:
+                  print("TELEGRAM_BOT_TOKEN is not configured.")
+                  return {}
+
               url = (
                   f"https://api.telegram.org/"
                   f"bot{TELEGRAM_BOT_TOKEN}/{method}"
@@ -418,25 +416,18 @@ jobs:
               data = None
 
               if payload is not None:
-                  data = urllib.parse.urlencode(
-                      payload
-                  ).encode("utf-8")
+                  data = urllib.parse.urlencode(payload).encode("utf-8")
 
               request = urllib.request.Request(
                   url,
                   data=data,
                   headers={
                       "User-Agent": "Uncle-Goo-Crypto-Monitor/1.0"
-                  }
+                  },
               )
 
-              with urllib.request.urlopen(
-                  request,
-                  timeout=20
-              ) as response:
-                  return json.loads(
-                      response.read().decode("utf-8")
-                  )
+              with urllib.request.urlopen(request, timeout=20) as response:
+                  return json.loads(response.read().decode("utf-8"))
 
 
           def get_chat_id():
@@ -470,7 +461,7 @@ jobs:
                       "chat_id": chat_id,
                       "text": text,
                       "disable_web_page_preview": False,
-                  }
+                  },
               )
 
               return result.get("ok", False)
@@ -484,22 +475,21 @@ jobs:
               if not os.path.exists(STATE_FILE):
                   return {
                       "alerts": {},
-                      "news": {}
+                      "news": {},
                   }
 
               try:
                   with open(
                       STATE_FILE,
                       "r",
-                      encoding="utf-8"
+                      encoding="utf-8",
                   ) as f:
                       raw = json.load(f)
 
-                  # Migration from previous version
                   if "alerts" not in raw and "news" not in raw:
                       return {
                           "alerts": raw,
-                          "news": {}
+                          "news": {},
                       }
 
                   raw.setdefault("alerts", {})
@@ -510,7 +500,7 @@ jobs:
               except Exception:
                   return {
                       "alerts": {},
-                      "news": {}
+                      "news": {},
                   }
 
 
@@ -518,13 +508,13 @@ jobs:
               with open(
                   STATE_FILE,
                   "w",
-                  encoding="utf-8"
+                  encoding="utf-8",
               ) as f:
                   json.dump(
                       state,
                       f,
                       ensure_ascii=False,
-                      indent=2
+                      indent=2,
                   )
 
 
@@ -534,9 +524,9 @@ jobs:
                       "git",
                       "config",
                       "user.name",
-                      "github-actions[bot]"
+                      "github-actions[bot]",
                   ],
-                  check=True
+                  check=True,
               )
 
               subprocess.run(
@@ -544,18 +534,18 @@ jobs:
                       "git",
                       "config",
                       "user.email",
-                      "41898282+github-actions[bot]@users.noreply.github.com"
+                      "41898282+github-actions[bot]@users.noreply.github.com",
                   ],
-                  check=True
+                  check=True,
               )
 
               subprocess.run(
                   [
                       "git",
                       "add",
-                      STATE_FILE
+                      STATE_FILE,
                   ],
-                  check=True
+                  check=True,
               )
 
               result = subprocess.run(
@@ -563,7 +553,7 @@ jobs:
                       "git",
                       "diff",
                       "--cached",
-                      "--quiet"
+                      "--quiet",
                   ]
               )
 
@@ -575,22 +565,22 @@ jobs:
                       "git",
                       "commit",
                       "-m",
-                      "Update crypto monitor state"
+                      "Update crypto monitor state",
                   ],
-                  check=True
+                  check=True,
               )
 
               subprocess.run(
                   [
                       "git",
-                      "push"
+                      "push",
                   ],
-                  check=True
+                  check=True,
               )
 
 
           # ============================================================
-          # PRICE ALERT DEDUP
+          # ALERT DEDUPLICATION
           # ============================================================
 
           def should_send_alert(state, fingerprint):
@@ -604,9 +594,7 @@ jobs:
                       item["sent_at"]
                   )
 
-                  now = datetime.now(
-                      timezone.utc
-                  )
+                  now = datetime.now(timezone.utc)
 
                   age = (
                       now - sent_at
@@ -630,32 +618,68 @@ jobs:
           # BITGET MARKET DATA
           # ============================================================
 
+          def get_ticker(symbol):
+              data = http_get_json(
+                  BITGET_TICKER_URL,
+                  {
+                      "category": "SPOT",
+                      "symbol": symbol,
+                  },
+              )
+
+              if data.get("code") != "00000":
+                  raise RuntimeError(
+                      f"Bitget ticker error: {data}"
+                  )
+
+              rows = data.get("data", [])
+
+              if not rows:
+                  raise RuntimeError(
+                      f"No ticker data for {symbol}"
+                  )
+
+              last_price = rows[0].get("lastPrice")
+
+              if last_price is None:
+                  raise RuntimeError(
+                      f"No lastPrice for {symbol}"
+                  )
+
+              return float(last_price)
+
+
           def get_candles(symbol):
               data = http_get_json(
-                  BITGET_URL,
+                  BITGET_CANDLES_URL,
                   {
                       "category": "SPOT",
                       "symbol": symbol,
                       "interval": "5m",
                       "limit": 30,
-                  }
+                  },
               )
 
               if data.get("code") != "00000":
                   raise RuntimeError(
-                      f"Bitget error: {data}"
+                      f"Bitget candle error: {data}"
                   )
 
               candles = data.get("data", [])
 
               if len(candles) < 13:
                   raise RuntimeError(
-                      f"Not enough candles for {symbol}"
+                      f"Not enough candles for {symbol}: "
+                      f"{len(candles)}"
                   )
 
-              # Bitget normally returns newest first.
-              candles = list(
-                  reversed(candles)
+              # IMPORTANT:
+              # Never blindly reverse Bitget candles.
+              # Sort explicitly by timestamp so the oldest candle
+              # is first and newest candle is last.
+              candles = sorted(
+                  candles,
+                  key=lambda c: int(c[0]),
               )
 
               closes = [
@@ -672,17 +696,20 @@ jobs:
 
 
           def calculate_market(symbol):
+              # Current live price comes from ticker.
+              # This prevents an old candle close from being
+              # interpreted as the current price.
+              price_now = get_ticker(symbol)
+
               closes, volumes = get_candles(symbol)
 
-              price_now = closes[-1]
-
-              # 5 minutes
+              # 5m candle immediately before the newest candle
               price_5 = closes[-2]
 
-              # 30 minutes
+              # 30 minutes = 6 x 5-minute intervals
               price_30 = closes[-7]
 
-              # 60 minutes
+              # 60 minutes = 12 x 5-minute intervals
               price_60 = closes[-13]
 
               change_5 = (
@@ -697,18 +724,20 @@ jobs:
                   (price_now / price_60) - 1
               ) * 100
 
+              # Current 30-minute volume
               current_volume = sum(
                   volumes[-6:]
               )
 
+              # Previous 30-minute volume
               previous_volume = sum(
                   volumes[-12:-6]
               )
 
               if previous_volume > 0:
                   volume_ratio = (
-                      current_volume
-                      / previous_volume
+                      current_volume /
+                      previous_volume
                   )
               else:
                   volume_ratio = 0
@@ -733,13 +762,13 @@ jobs:
               text = re.sub(
                   r"<[^>]+>",
                   " ",
-                  text
+                  text,
               )
 
               text = re.sub(
                   r"\s+",
                   " ",
-                  text
+                  text,
               )
 
               return text.strip()
@@ -752,9 +781,7 @@ jobs:
               value = value.strip()
 
               try:
-                  dt = parsedate_to_datetime(
-                      value
-                  )
+                  dt = parsedate_to_datetime(value)
 
                   if dt.tzinfo is None:
                       dt = dt.replace(
@@ -769,13 +796,13 @@ jobs:
                   pass
 
               try:
-                  value2 = value.replace(
+                  value = value.replace(
                       "Z",
-                      "+00:00"
+                      "+00:00",
                   )
 
                   dt = datetime.fromisoformat(
-                      value2
+                      value
                   )
 
                   if dt.tzinfo is None:
@@ -791,22 +818,13 @@ jobs:
                   return None
 
 
-          def parse_feed(source, url):
-              try:
-                  raw = http_get_text(
-                      url,
-                      NEWS_TIMEOUT
-                  )
+          def parse_feed(source_name, url):
+              raw = http_get_text(
+                  url,
+                  timeout=NEWS_TIMEOUT,
+              )
 
-                  root = ET.fromstring(
-                      raw
-                  )
-
-              except Exception as e:
-                  print(
-                      f"News feed error [{source}]: {e}"
-                  )
-                  return []
+              root = ET.fromstring(raw)
 
               articles = []
 
@@ -822,49 +840,42 @@ jobs:
                       item.findtext("link")
                   )
 
-                  guid = clean_text(
-                      item.findtext("guid")
-                  )
-
                   description = clean_text(
                       item.findtext("description")
                   )
 
-                  pub_date = clean_text(
+                  pub_date = (
                       item.findtext("pubDate")
+                      or item.findtext("published")
+                      or item.findtext("updated")
                   )
 
-                  published = parse_date(
-                      pub_date
-                  )
-
-                  if not link:
-                      link = guid
+                  dt = parse_date(pub_date)
 
                   if title:
                       articles.append(
                           {
-                              "source": source,
+                              "source": source_name,
                               "title": title,
                               "link": link,
-                              "summary": description,
-                              "published": published,
+                              "description": description,
+                              "date": dt,
                           }
                       )
 
               # Atom
               if not articles:
-                  namespaces = {
+                  ns = {
                       "atom": "http://www.w3.org/2005/Atom"
                   }
 
                   for entry in root.findall(
                       ".//atom:entry",
-                      namespaces
+                      ns,
                   ):
                       title_node = entry.find(
                           "atom:title",
-                          namespaces
+                          ns,
                       )
 
                       title = clean_text(
@@ -875,34 +886,25 @@ jobs:
 
                       link = ""
 
-                      for link_node in entry.findall(
+                      link_node = entry.find(
                           "atom:link",
-                          namespaces
-                      ):
-                          href = link_node.attrib.get(
-                              "href",
-                              ""
-                          )
+                          ns,
+                      )
 
-                          rel = link_node.attrib.get(
-                              "rel",
-                              "alternate"
+                      if link_node is not None:
+                          link = (
+                              link_node.attrib.get(
+                                  "href",
+                                  "",
+                              )
                           )
-
-                          if (
-                              href
-                              and
-                              rel == "alternate"
-                          ):
-                              link = href
-                              break
 
                       summary_node = entry.find(
                           "atom:summary",
-                          namespaces
+                          ns,
                       )
 
-                      summary = clean_text(
+                      description = clean_text(
                           summary_node.text
                           if summary_node is not None
                           else ""
@@ -910,308 +912,259 @@ jobs:
 
                       published_node = entry.find(
                           "atom:published",
-                          namespaces
+                          ns,
                       )
 
                       updated_node = entry.find(
                           "atom:updated",
-                          namespaces
+                          ns,
                       )
 
-                      date_text = ""
+                      date_value = ""
 
                       if published_node is not None:
-                          date_text = (
+                          date_value = (
                               published_node.text
                               or ""
                           )
 
-                      if (
-                          not date_text
-                          and
-                          updated_node is not None
-                      ):
-                          date_text = (
+                      elif updated_node is not None:
+                          date_value = (
                               updated_node.text
                               or ""
                           )
 
-                      published = parse_date(
-                          date_text
+                      dt = parse_date(
+                          date_value
                       )
 
                       if title:
                           articles.append(
                               {
-                                  "source": source,
+                                  "source": source_name,
                                   "title": title,
                                   "link": link,
-                                  "summary": summary,
-                                  "published": published,
+                                  "description": description,
+                                  "date": dt,
                               }
                           )
 
               return articles
 
 
-          def article_coin_matches(article):
+          def article_coin_matches(
+              article,
+              symbol,
+          ):
+              coin = symbol.replace(
+                  "USDT",
+                  "",
+              )
+
+              keywords = NEWS_KEYWORDS.get(
+                  coin,
+                  [],
+              )
+
               text = (
-                  article["title"]
+                  article.get("title", "")
                   + " "
-                  + article["summary"]
+                  + article.get("description", "")
               ).lower()
 
-              title = (
-                  article["title"]
-                  .lower()
-              )
+              for keyword in keywords:
+                  keyword = keyword.lower()
 
-              matches = []
+                  if keyword in text:
+                      return True
 
-              for coin, keywords in NEWS_KEYWORDS.items():
-
-                  # Stronger matching in title
-                  title_match = any(
-                      keyword.lower() in title
-                      for keyword in keywords
-                  )
-
-                  if title_match:
-                      matches.append(coin)
-                      continue
-
-                  # Summary match is accepted only
-                  # for strong news signals.
-                  summary_match = any(
-                      keyword.lower() in text
-                      for keyword in keywords
-                  )
-
-                  if summary_match:
-                      signal = detect_news_signal(
-                          text
-                      )
-
-                      if signal is not None:
-                          matches.append(coin)
-
-              return matches
+              return False
 
 
-          def detect_news_signal(text):
-              for label, keywords in NEWS_SIGNALS:
+          def detect_news_signal(article):
+              text = (
+                  article.get("title", "")
+                  + " "
+                  + article.get("description", "")
+              ).lower()
+
+              for signal_name, keywords in NEWS_SIGNALS:
                   for keyword in keywords:
-                      if keyword in text:
-                          return label
+                      if keyword.lower() in text:
+                          return signal_name
 
-              return "📰 NEWS"
+              return None
 
 
-          def news_fingerprint(article):
-              base = (
-                  article["title"]
-                  .strip()
-                  .lower()
+          def news_fingerprint(article, symbol):
+              raw = (
+                  symbol
+                  + "|"
+                  + article.get("source", "")
+                  + "|"
+                  + article.get("title", "")
               )
+
+              import hashlib
 
               return hashlib.sha256(
-                  base.encode("utf-8")
+                  raw.encode("utf-8")
               ).hexdigest()
 
 
           def format_news(
               article,
-              coins,
-              signal
+              symbol,
+              signal,
           ):
-              coins_text = ", ".join(
-                  f"${coin}"
-                  for coin in coins
+              source = article.get(
+                  "source",
+                  "News",
               )
 
-              published = article.get(
-                  "published"
+              title = article.get(
+                  "title",
+                  "",
               )
-
-              if published:
-                  time_text = published.strftime(
-                      "%H:%M UTC"
-                  )
-              else:
-                  time_text = "time unknown"
 
               link = article.get(
                   "link",
-                  ""
+                  "",
               )
 
-              message = (
+              return (
                   f"{signal}\n\n"
-                  f"🪙 {coins_text}\n"
-                  f"📰 {article['title']}\n\n"
-                  f"Источник: {article['source']}\n"
-                  f"Время: {time_text}"
+                  f"🪙 {symbol}\n"
+                  f"📰 {title}\n\n"
+                  f"Источник: {source}\n"
+                  f"{link}"
               )
-
-              if link:
-                  message += (
-                      f"\n\n🔗 {link}"
-                  )
-
-              return message
 
 
           def process_news(state):
+              news_sent = 0
+
               now = datetime.now(
                   timezone.utc
               )
 
               cutoff = (
-                  now
-                  - timedelta(
+                  now -
+                  timedelta(
                       hours=NEWS_LOOKBACK_HOURS
                   )
               )
 
-              candidates = []
+              all_articles = []
 
-              for source, url in NEWS_FEEDS:
-                  articles = parse_feed(
-                      source,
-                      url
-                  )
-
-                  print(
-                      f"{source}: "
-                      f"{len(articles)} articles"
-                  )
-
-                  for article in articles:
-
-                      published = article.get(
-                          "published"
+              for source_name, feed_url in NEWS_FEEDS:
+                  try:
+                      articles = parse_feed(
+                          source_name,
+                          feed_url,
                       )
 
-                      if published:
-                          if published < cutoff:
-                              continue
-
-                      coins = article_coin_matches(
-                          article
+                      print(
+                          f"{source_name}: "
+                          f"{len(articles)} articles"
                       )
 
-                      if not coins:
+                      all_articles.extend(
+                          articles
+                      )
+
+                  except Exception as e:
+                      print(
+                          f"NEWS ERROR "
+                          f"{source_name}: {e}"
+                      )
+
+              # Newest first
+              all_articles.sort(
+                  key=lambda a: (
+                      a.get("date")
+                      or datetime.min.replace(
+                          tzinfo=timezone.utc
+                      )
+                  ),
+                  reverse=True,
+              )
+
+              for article in all_articles:
+
+                  if news_sent >= MAX_NEWS_ALERTS_PER_RUN:
+                      break
+
+                  article_date = article.get(
+                      "date"
+                  )
+
+                  if article_date is not None:
+                      if article_date < cutoff:
                           continue
 
-                      fingerprint = news_fingerprint(
-                          article
+                  signal = detect_news_signal(
+                      article
+                  )
+
+                  if not signal:
+                      continue
+
+                  for symbol in SYMBOLS:
+
+                      if news_sent >= MAX_NEWS_ALERTS_PER_RUN:
+                          break
+
+                      if not article_coin_matches(
+                          article,
+                          symbol,
+                      ):
+                          continue
+
+                      fingerprint = (
+                          news_fingerprint(
+                              article,
+                              symbol,
+                          )
                       )
 
                       if fingerprint in state["news"]:
                           continue
 
-                      signal = detect_news_signal(
-                          (
-                              article["title"]
-                              + " "
-                              + article["summary"]
-                          ).lower()
+                      message = format_news(
+                          article,
+                          symbol,
+                          signal,
                       )
 
-                      candidates.append(
-                          (
-                              article,
-                              coins,
-                              signal,
-                              fingerprint
-                          )
-                      )
-
-              # Newest first
-              candidates.sort(
-                  key=lambda x: (
-                      x[0]["published"]
-                      or datetime.min.replace(
-                          tzinfo=timezone.utc
-                      )
-                  ),
-                  reverse=True
-              )
-
-              sent_count = 0
-
-              for (
-                  article,
-                  coins,
-                  signal,
-                  fingerprint
-              ) in candidates:
-
-                  if (
-                      sent_count
-                      >= MAX_NEWS_ALERTS_PER_RUN
-                  ):
-                      break
-
-                  message = format_news(
-                      article,
-                      coins,
-                      signal
-                  )
-
-                  print(
-                      "\nNEWS ALERT:\n"
-                      + message
-                  )
-
-                  try:
-                      success = send_telegram(
-                          message
-                      )
-
-                      if success:
-                          state["news"][
-                              fingerprint
-                          ] = {
-                              "sent_at": now.isoformat(),
-                              "title": article["title"],
-                          }
-
-                          sent_count += 1
-
-                  except Exception as e:
                       print(
-                          f"Telegram news error: {e}"
+                          "\nNEWS ALERT:\n"
+                          + message
                       )
 
-              # Remove very old news fingerprints
-              retention_cutoff = (
-                  now
-                  - timedelta(days=7)
-              )
+                      try:
+                          success = send_telegram(
+                              message
+                          )
 
-              for fingerprint in list(
-                  state["news"].keys()
-              ):
-                  try:
-                      sent_at = datetime.fromisoformat(
-                          state["news"][fingerprint][
-                              "sent_at"
-                          ]
-                      )
+                          if success:
+                              state["news"][
+                                  fingerprint
+                              ] = {
+                                  "sent_at":
+                                      datetime.now(
+                                          timezone.utc
+                                      ).isoformat()
+                              }
 
-                      if (
-                          sent_at
-                          < retention_cutoff
-                      ):
-                          del state["news"][
-                              fingerprint
-                          ]
+                              news_sent += 1
 
-                  except Exception:
-                      pass
+                      except Exception as e:
+                          print(
+                              f"Telegram news error: {e}"
+                          )
 
-              return sent_count
+              return news_sent
 
 
           # ============================================================
@@ -1219,57 +1172,53 @@ jobs:
           # ============================================================
 
           if TEST_TELEGRAM:
-              message = (
-                  "🚀 UNCLE GOO CRYPTO MONITOR\n\n"
-                  "Telegram works!\n\n"
-                  "✅ Price monitor\n"
-                  "✅ 5-minute price monitor\n"
-                  "✅ 30-minute price monitor\n"
-                  "✅ 60-minute price monitor\n"
-                  "✅ Volume monitor\n"
-                  "✅ Alert deduplication\n"
-                  "✅ News monitor\n"
-                  "✅ РБК\n"
-                  "✅ Investing.com\n"
-                  "✅ ForkLog\n\n"
-                  "⏱ Monitor interval: 5 minutes"
-              )
-
-              success = send_telegram(
-                  message
+              test_message = (
+                  "🚀 Uncle Goo Crypto Monitor\n\n"
+                  "Тестовое сообщение работает!\n\n"
+                  "Мониторинг:\n"
+                  "• Bitget Spot\n"
+                  "• 5m / 30m / 60m\n"
+                  "• РБК\n"
+                  "• Investing.com\n"
+                  "• ForkLog"
               )
 
               print(
-                  "Telegram test:",
-                  success
+                  "Sending Telegram test..."
               )
 
-              raise SystemExit(0)
+              try:
+                  if send_telegram(
+                      test_message
+                  ):
+                      print(
+                          "Telegram test sent successfully."
+                      )
+                  else:
+                      print(
+                          "Telegram test failed."
+                      )
+              except Exception as e:
+                  print(
+                      f"Telegram test error: {e}"
+                  )
 
 
           # ============================================================
-          # MAIN
+          # MAIN MARKET MONITOR
           # ============================================================
 
           state = load_state()
 
           alerts_sent = 0
 
-          print(
-              "=============================="
-          )
-
-          print(
-              "UNCLE GOO CRYPTO MONITOR"
-          )
-
-          print(
-              "=============================="
-          )
-
-          # ------------------------------------------------------------
-          # MARKET MONITOR
-          # ------------------------------------------------------------
+          print("")
+          print("=" * 70)
+          print("UNCLE GOO CRYPTO MONITOR")
+          print("=" * 70)
+          print("Bitget Spot")
+          print("5m / 30m / 60m")
+          print("=" * 70)
 
           for symbol in SYMBOLS:
 
@@ -1278,24 +1227,17 @@ jobs:
                       symbol
                   )
 
-                  change_5 = market[
-                      "change_5"
-                  ]
-
-                  change_30 = market[
-                      "change_30"
-                  ]
-
-                  change_60 = market[
-                      "change_60"
-                  ]
-
+                  price = market["price"]
+                  change_5 = market["change_5"]
+                  change_30 = market["change_30"]
+                  change_60 = market["change_60"]
                   volume_ratio = market[
                       "volume_ratio"
                   ]
 
                   print(
                       f"{symbol}: "
+                      f"price={price:.10g} "
                       f"5m={change_5:+.2f}% "
                       f"30m={change_30:+.2f}% "
                       f"60m={change_60:+.2f}% "
@@ -1304,25 +1246,25 @@ jobs:
 
                   alerts = []
 
-                  # ----------------------------------------------------
-                  # 5 MINUTE ALERTS
-                  # ----------------------------------------------------
+                  # --------------------------------------------------
+                  # 5-MINUTE ALERTS
+                  # --------------------------------------------------
 
                   if abs(change_5) >= EXTREME_5:
                       alerts.append(
                           (
                               "EXTREME",
                               change_5,
-                              "5m"
+                              "5m",
                           )
                       )
 
                   elif abs(change_5) >= VERY_STRONG_5:
                       alerts.append(
                           (
-                              "VERY_STRONG",
+                              "VERY STRONG",
                               change_5,
-                              "5m"
+                              "5m",
                           )
                       )
 
@@ -1331,7 +1273,7 @@ jobs:
                           (
                               "STRONG",
                               change_5,
-                              "5m"
+                              "5m",
                           )
                       )
 
@@ -1340,35 +1282,35 @@ jobs:
                           (
                               "SHARP",
                               change_5,
-                              "5m"
+                              "5m",
                           )
                       )
 
 
-                  # ----------------------------------------------------
-                  # 30 MINUTE ALERT
-                  # ----------------------------------------------------
+                  # --------------------------------------------------
+                  # 30-MINUTE ALERT
+                  # --------------------------------------------------
 
                   if abs(change_30) >= STRONG_30:
                       alerts.append(
                           (
                               "STRONG",
                               change_30,
-                              "30m"
+                              "30m",
                           )
                       )
 
 
-                  # ----------------------------------------------------
-                  # 60 MINUTE ALERTS
-                  # ----------------------------------------------------
+                  # --------------------------------------------------
+                  # 60-MINUTE ALERTS
+                  # --------------------------------------------------
 
                   if abs(change_60) >= EXTREME_60:
                       alerts.append(
                           (
                               "EXTREME",
                               change_60,
-                              "60m"
+                              "60m",
                           )
                       )
 
@@ -1377,14 +1319,14 @@ jobs:
                           (
                               "SHARP",
                               change_60,
-                              "60m"
+                              "60m",
                           )
                       )
 
 
-                  # ----------------------------------------------------
+                  # --------------------------------------------------
                   # ABNORMAL VOLUME
-                  # ----------------------------------------------------
+                  # --------------------------------------------------
 
                   if (
                       volume_ratio
@@ -1397,19 +1339,19 @@ jobs:
                           (
                               "VOLUME",
                               change_60,
-                              "60m"
+                              "60m",
                           )
                       )
 
 
-                  # ----------------------------------------------------
-                  # SEND PRICE ALERTS
-                  # ----------------------------------------------------
+                  # --------------------------------------------------
+                  # SEND ALERTS
+                  # --------------------------------------------------
 
                   for (
                       level,
                       change,
-                      period
+                      period,
                   ) in alerts:
 
                       direction = (
@@ -1421,12 +1363,13 @@ jobs:
                       fingerprint = (
                           f"{symbol}:"
                           f"{level}:"
+                          f"{period}:"
                           f"{direction}"
                       )
 
                       if not should_send_alert(
                           state,
-                          fingerprint
+                          fingerprint,
                       ):
                           continue
 
@@ -1434,29 +1377,36 @@ jobs:
                           emoji = "🚨"
                           title = "EXTREME MOVE"
 
-                      elif level == "VERY_STRONG":
+                      elif level == "VERY STRONG":
                           emoji = "🔴"
                           title = "VERY STRONG MOVE"
 
                       elif level == "STRONG":
-                          emoji = "🟠"
+                          emoji = "🔴"
                           title = "STRONG MOVE"
 
                       elif level == "SHARP":
-                          emoji = "🟡"
+                          emoji = "🟠"
                           title = "SHARP MOVE"
 
                       else:
                           emoji = "🟣"
                           title = "ABNORMAL VOLUME"
 
+
+                      direction_text = (
+                          "📈 Рост"
+                          if change > 0
+                          else "📉 Падение"
+                      )
+
                       message = (
                           f"{emoji} {title}\n\n"
                           f"🪙 {symbol}\n"
-                          f"💰 Price: "
-                          f"{market['price']:.10g}\n"
-                          f"📈 {period}: "
+                          f"💰 Price: {price:.10g}\n"
+                          f"⏱ {period}: "
                           f"{change:+.2f}%\n"
+                          f"{direction_text}\n"
                           f"📊 Volume: "
                           f"{volume_ratio:.1f}x\n\n"
                           f"Bitget Spot"
@@ -1475,7 +1425,7 @@ jobs:
                           if success:
                               mark_alert_sent(
                                   state,
-                                  fingerprint
+                                  fingerprint,
                               )
 
                               alerts_sent += 1
@@ -1491,58 +1441,56 @@ jobs:
                   )
 
 
-          # ------------------------------------------------------------
+          # ============================================================
           # NEWS MONITOR
-          # ------------------------------------------------------------
+          # ============================================================
 
-          news_sent = process_news(
-              state
-          )
+          try:
+              news_sent = process_news(
+                  state
+              )
+          except Exception as e:
+              print(
+                  f"NEWS PROCESS ERROR: {e}"
+              )
+              news_sent = 0
 
 
-          # ------------------------------------------------------------
+          # ============================================================
           # SAVE STATE
-          # ------------------------------------------------------------
+          # ============================================================
 
-          if (
-              alerts_sent > 0
-              or
-              news_sent > 0
-          ):
-              save_state(state)
+          save_state(state)
 
-              try:
-                  save_state_to_github()
-
-              except Exception as e:
-                  print(
-                      f"State git save error: {e}"
-                  )
+          try:
+              save_state_to_github()
+          except Exception as e:
+              print(
+                  f"GitHub state save error: {e}"
+              )
 
 
+          # ============================================================
+          # SUMMARY
+          # ============================================================
+
+          print("")
+          print("=" * 70)
           print(
-              "\n=============================="
+              f"Price alerts sent: "
+              f"{alerts_sent}"
           )
-
           print(
-              f"Price alerts sent: {alerts_sent}"
-          )
-
-          print(
-              f"News alerts sent: {news_sent}"
+              f"News alerts sent: "
+              f"{news_sent}"
           )
 
           if (
               alerts_sent == 0
-              and
-              news_sent == 0
+              and news_sent == 0
           ):
-              print(
-                  "No alerts."
-              )
+              print("No alerts.")
 
-          print(
-              "=============================="
-          )
+          print("=" * 70)
 
           PY
