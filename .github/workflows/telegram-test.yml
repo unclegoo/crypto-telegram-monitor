@@ -12,6 +12,9 @@ on:
   schedule:
     - cron: "*/5 * * * *"
 
+permissions:
+  contents: write
+
 concurrency:
   group: uncle-goo-crypto-monitor
   cancel-in-progress: false
@@ -34,7 +37,8 @@ jobs:
           import json
           import urllib.request
           import urllib.parse
-          from datetime import datetime, timezone
+          import subprocess
+          from datetime import datetime, timezone, timedelta
 
 
           # ============================================================
@@ -48,6 +52,10 @@ jobs:
           )
 
           BASE = "https://api.bitget.com"
+
+          STATE_FILE = ".crypto_monitor_state.json"
+
+          ALERT_COOLDOWN_MINUTES = 60
 
           COINS = [
               "BTC",
@@ -88,14 +96,20 @@ jobs:
                   }
               )
 
-              with urllib.request.urlopen(req, timeout=20) as response:
+              with urllib.request.urlopen(
+                  req,
+                  timeout=20
+              ) as response:
+
                   return json.loads(
                       response.read().decode("utf-8")
                   )
 
 
           def post_json(url, data):
-              body = urllib.parse.urlencode(data).encode()
+              body = urllib.parse.urlencode(
+                  data
+              ).encode()
 
               req = urllib.request.Request(
                   url,
@@ -107,7 +121,11 @@ jobs:
                   }
               )
 
-              with urllib.request.urlopen(req, timeout=20) as response:
+              with urllib.request.urlopen(
+                  req,
+                  timeout=20
+              ) as response:
+
                   return json.loads(
                       response.read().decode("utf-8")
                   )
@@ -118,10 +136,6 @@ jobs:
           # ============================================================
 
           def prepare_telegram_polling():
-              """
-              If a webhook exists, remove it so getUpdates can work.
-              Pending updates are NOT deleted.
-              """
 
               url = (
                   f"https://api.telegram.org/bot"
@@ -135,9 +149,14 @@ jobs:
                       f"Telegram getWebhookInfo error: {result}"
                   )
 
-              webhook_url = result.get("result", {}).get("url", "")
+              webhook_url = (
+                  result
+                  .get("result", {})
+                  .get("url", "")
+              )
 
               if webhook_url:
+
                   delete_url = (
                       f"https://api.telegram.org/bot"
                       f"{TOKEN}/deleteWebhook"
@@ -145,7 +164,9 @@ jobs:
 
                   delete_result = post_json(
                       delete_url,
-                      {"drop_pending_updates": "false"}
+                      {
+                          "drop_pending_updates": "false"
+                      }
                   )
 
                   if not delete_result.get("ok"):
@@ -156,12 +177,6 @@ jobs:
 
 
           def get_chat_id():
-              """
-              Find the latest private chat that interacted with the bot.
-
-              The user only needs to send /start to the bot once.
-              The numeric chat_id is never printed into GitHub logs.
-              """
 
               prepare_telegram_polling()
 
@@ -177,13 +192,25 @@ jobs:
                       f"Telegram getUpdates error: {result}"
                   )
 
-              updates = result.get("result", [])
+              updates = result.get(
+                  "result",
+                  []
+              )
 
               for update in reversed(updates):
-                  message = update.get("message", {})
-                  chat = message.get("chat", {})
+
+                  message = update.get(
+                      "message",
+                      {}
+                  )
+
+                  chat = message.get(
+                      "chat",
+                      {}
+                  )
 
                   if chat.get("type") == "private":
+
                       chat_id = chat.get("id")
 
                       if chat_id is not None:
@@ -196,6 +223,7 @@ jobs:
 
 
           def send_telegram(text):
+
               chat_id = get_chat_id()
 
               url = (
@@ -216,14 +244,218 @@ jobs:
                       f"Telegram sendMessage error: {result}"
                   )
 
-              print("Telegram message sent successfully.")
+              print(
+                  "Telegram message sent successfully."
+              )
 
 
           # ============================================================
-          # BITGET MARKET DATA
+          # STATE
+          # ============================================================
+
+          def load_state():
+
+              if not os.path.exists(
+                  STATE_FILE
+              ):
+
+                  return {}
+
+              try:
+
+                  with open(
+                      STATE_FILE,
+                      "r",
+                      encoding="utf-8"
+                  ) as file:
+
+                      data = json.load(file)
+
+                  if isinstance(data, dict):
+                      return data
+
+              except Exception as error:
+
+                  print(
+                      f"State read error: {error}"
+                  )
+
+              return {}
+
+
+          def save_state(state):
+
+              with open(
+                  STATE_FILE,
+                  "w",
+                  encoding="utf-8"
+              ) as file:
+
+                  json.dump(
+                      state,
+                      file,
+                      ensure_ascii=False,
+                      indent=2
+                  )
+
+
+          def should_send_alert(
+              state,
+              fingerprint
+          ):
+
+              item = state.get(
+                  fingerprint
+              )
+
+              if not item:
+                  return True
+
+              last_sent = item.get(
+                  "sent_at"
+              )
+
+              if not last_sent:
+                  return True
+
+              try:
+
+                  last_time = datetime.fromisoformat(
+                      last_sent
+                  )
+
+              except Exception:
+
+                  return True
+
+              now = datetime.now(
+                  timezone.utc
+              )
+
+              elapsed = (
+                  now - last_time
+              ).total_seconds() / 60
+
+              if elapsed >= ALERT_COOLDOWN_MINUTES:
+                  return True
+
+              remaining = (
+                  ALERT_COOLDOWN_MINUTES
+                  - elapsed
+              )
+
+              print(
+                  f"Duplicate suppressed: "
+                  f"{fingerprint} "
+                  f"({remaining:.0f} min remaining)"
+              )
+
+              return False
+
+
+          def mark_alert_sent(
+              state,
+              fingerprint
+          ):
+
+              state[fingerprint] = {
+                  "sent_at": datetime.now(
+                      timezone.utc
+                  ).isoformat()
+              }
+
+
+          # ============================================================
+          # SAVE STATE TO GITHUB
+          # ============================================================
+
+          def save_state_to_github():
+
+              try:
+
+                  subprocess.run(
+                      [
+                          "git",
+                          "config",
+                          "user.name",
+                          "github-actions[bot]"
+                      ],
+                      check=True
+                  )
+
+                  subprocess.run(
+                      [
+                          "git",
+                          "config",
+                          "user.email",
+                          "41898282+github-actions[bot]"
+                          "@users.noreply.github.com"
+                      ],
+                      check=True
+                  )
+
+                  subprocess.run(
+                      [
+                          "git",
+                          "add",
+                          STATE_FILE
+                      ],
+                      check=True
+                  )
+
+                  result = subprocess.run(
+                      [
+                          "git",
+                          "diff",
+                          "--cached",
+                          "--quiet"
+                      ]
+                  )
+
+                  if result.returncode == 0:
+
+                      print(
+                          "State unchanged."
+                      )
+
+                      return
+
+                  subprocess.run(
+                      [
+                          "git",
+                          "commit",
+                          "-m",
+                          "Update crypto monitor state"
+                      ],
+                      check=True
+                  )
+
+                  subprocess.run(
+                      [
+                          "git",
+                          "push"
+                      ],
+                      check=True
+                  )
+
+                  print(
+                      "State saved to GitHub."
+                  )
+
+              except Exception as error:
+
+                  print(
+                      f"State GitHub save error: {error}"
+                  )
+                  raise
+
+
+          # ============================================================
+          # BITGET
           # ============================================================
 
           def get_candles(symbol):
+
               url = (
                   BASE
                   + "/api/v3/market/candles?"
@@ -237,14 +469,21 @@ jobs:
                   )
               )
 
-              result = get_json(url)
+              result = get_json(
+                  url
+              )
 
               if result.get("code") != "00000":
+
                   raise RuntimeError(
-                      f"Bitget error for {symbol}: {result}"
+                      f"Bitget error for {symbol}: "
+                      f"{result}"
                   )
 
-              return result.get("data", [])
+              return result.get(
+                  "data",
+                  []
+              )
 
 
           # ============================================================
@@ -252,169 +491,330 @@ jobs:
           # ============================================================
 
           if TEST_TELEGRAM:
+
               test_message = (
                   "🚀 UNCLE GOO CRYPTO MONITOR\n\n"
                   "✅ Telegram работает.\n"
                   "✅ Бот успешно получает сообщения.\n"
-                  "✅ Чат найден автоматически.\n"
-                  "✅ Связь с GitHub Actions работает.\n\n"
-                  "После этого теста монитор продолжит "
-                  "работать автоматически каждые 5 минут."
+                  "✅ Защита от повторных уведомлений включена.\n"
+                  "✅ Монитор работает каждые 5 минут."
               )
 
-              send_telegram(test_message)
+              send_telegram(
+                  test_message
+              )
 
-              print("Telegram test completed successfully.")
+              print(
+                  "Telegram test completed successfully."
+              )
+
               raise SystemExit(0)
+
+
+          # ============================================================
+          # LOAD STATE
+          # ============================================================
+
+          state = load_state()
+
+          alerts_to_send = []
+
+          state_changed = False
 
 
           # ============================================================
           # MARKET MONITOR
           # ============================================================
 
-          alerts = []
+          print("")
+          print(
+              "=========================================="
+          )
+          print(
+              "UNCLE GOO CRYPTO MONITOR"
+          )
+          print(
+              "=========================================="
+          )
+          print("")
 
-          print("")
-          print("==========================================")
-          print("UNCLE GOO CRYPTO MONITOR")
-          print("==========================================")
-          print("")
 
           for coin in COINS:
 
               symbol = coin + "USDT"
 
               try:
-                  data = get_candles(symbol)
+
+                  data = get_candles(
+                      symbol
+                  )
 
                   if len(data) < 13:
+
                       print(
-                          f"{symbol}: not enough candle data"
+                          f"{symbol}: "
+                          "not enough candle data"
                       )
+
                       continue
 
-                  # Bitget returns newest candles first.
-                  # Reverse so oldest candle is first.
-                  data = list(reversed(data))
 
-                  # 5-minute candles:
+                  # Bitget returns newest first.
+                  data = list(
+                      reversed(data)
+                  )
+
+
+                  # 5-minute candles.
                   #
-                  # data[0]  = approximately 60 minutes ago
-                  # data[6]  = approximately 30 minutes ago
-                  # data[-1] = latest candle
-                  #
-                  # Close price is index 4.
+                  # 12 intervals = 60 minutes.
+                  # 6 intervals  = 30 minutes.
 
-                  old_60 = float(data[0][4])
-                  old_30 = float(data[6][4])
-                  current = float(data[-1][4])
+                  old_60 = float(
+                      data[0][4]
+                  )
 
-                  if old_60 <= 0 or old_30 <= 0:
+                  old_30 = float(
+                      data[6][4]
+                  )
+
+                  current = float(
+                      data[-1][4]
+                  )
+
+
+                  if (
+                      old_60 <= 0
+                      or old_30 <= 0
+                  ):
+
                       print(
-                          f"{symbol}: invalid price data"
+                          f"{symbol}: "
+                          "invalid price data"
                       )
+
                       continue
+
 
                   change_60 = (
-                      (current / old_60) - 1
+                      (
+                          current
+                          / old_60
+                      ) - 1
                   ) * 100
+
 
                   change_30 = (
-                      (current / old_30) - 1
+                      (
+                          current
+                          / old_30
+                      ) - 1
                   ) * 100
 
-                  # Volume.
-                  # Index 5 = base asset volume.
+
+                  # ==================================================
+                  # VOLUME
+                  # ==================================================
+
                   volumes = [
                       float(candle[5])
                       for candle in data[:-1]
                   ]
 
-                  current_volume = float(data[-1][5])
-
-                  avg_volume = (
-                      sum(volumes) / len(volumes)
-                      if volumes
-                      else 0
+                  current_volume = float(
+                      data[-1][5]
                   )
 
-                  if avg_volume > 0:
-                      volume_ratio = (
-                          current_volume / avg_volume
+                  if volumes:
+
+                      avg_volume = (
+                          sum(volumes)
+                          / len(volumes)
                       )
+
                   else:
+
+                      avg_volume = 0
+
+
+                  if avg_volume > 0:
+
+                      volume_ratio = (
+                          current_volume
+                          / avg_volume
+                      )
+
+                  else:
+
                       volume_ratio = 0
 
-                  level = None
 
                   # ==================================================
-                  # EXTREME MOVE
+                  # ALERT DETECTION
                   # ==================================================
 
+                  alert_text = None
+
+                  fingerprint = None
+
+
+                  # EXTREME
                   if abs(change_60) >= 12:
 
-                      level = "🚨 ЭКСТРЕМАЛЬНОЕ ДВИЖЕНИЕ"
-
-                  # ==================================================
-                  # STRONG MOVE
-                  # ==================================================
-
-                  elif abs(change_30) >= 8:
-
-                      level = "🔴 СИЛЬНОЕ ДВИЖЕНИЕ"
-
-                  # ==================================================
-                  # SHARP MOVE
-                  # ==================================================
-
-                  elif abs(change_60) >= 5:
-
-                      level = "🟠 РЕЗКОЕ ДВИЖЕНИЕ"
-
-                  # ==================================================
-                  # ALERT
-                  # ==================================================
-
-                  if level:
-
-                      if change_60 > 0:
-                          direction = "📈 РОСТ"
-                      else:
-                          direction = "📉 ПАДЕНИЕ"
-
-                      alerts.append(
-                          f"{level}\n"
-                          f"{direction}: {coin}/USDT\n"
-                          f"Цена: ${current:,.8f}\n"
-                          f"30 мин: {change_30:+.2f}%\n"
-                          f"60 мин: {change_60:+.2f}%\n"
-                          f"Объём: {volume_ratio:.1f}x среднего"
+                      level = (
+                          "🚨 ЭКСТРЕМАЛЬНОЕ ДВИЖЕНИЕ"
                       )
 
-                  # ==================================================
-                  # ABNORMAL VOLUME
-                  # ==================================================
+                      direction = (
+                          "📈 РОСТ"
+                          if change_60 > 0
+                          else "📉 ПАДЕНИЕ"
+                      )
 
+                      fingerprint = (
+                          f"{coin}:extreme:"
+                          f"{'up' if change_60 > 0 else 'down'}"
+                      )
+
+                      alert_text = (
+                          f"{level}\n"
+                          f"{direction}: "
+                          f"{coin}/USDT\n"
+                          f"Цена: "
+                          f"${current:,.8f}\n"
+                          f"30 мин: "
+                          f"{change_30:+.2f}%\n"
+                          f"60 мин: "
+                          f"{change_60:+.2f}%\n"
+                          f"Объём: "
+                          f"{volume_ratio:.1f}x среднего"
+                      )
+
+
+                  # STRONG
+                  elif abs(change_30) >= 8:
+
+                      level = (
+                          "🔴 СИЛЬНОЕ ДВИЖЕНИЕ"
+                      )
+
+                      direction = (
+                          "📈 РОСТ"
+                          if change_30 > 0
+                          else "📉 ПАДЕНИЕ"
+                      )
+
+                      fingerprint = (
+                          f"{coin}:strong:"
+                          f"{'up' if change_30 > 0 else 'down'}"
+                      )
+
+                      alert_text = (
+                          f"{level}\n"
+                          f"{direction}: "
+                          f"{coin}/USDT\n"
+                          f"Цена: "
+                          f"${current:,.8f}\n"
+                          f"30 мин: "
+                          f"{change_30:+.2f}%\n"
+                          f"60 мин: "
+                          f"{change_60:+.2f}%\n"
+                          f"Объём: "
+                          f"{volume_ratio:.1f}x среднего"
+                      )
+
+
+                  # SHARP
+                  elif abs(change_60) >= 5:
+
+                      level = (
+                          "🟠 РЕЗКОЕ ДВИЖЕНИЕ"
+                      )
+
+                      direction = (
+                          "📈 РОСТ"
+                          if change_60 > 0
+                          else "📉 ПАДЕНИЕ"
+                      )
+
+                      fingerprint = (
+                          f"{coin}:sharp:"
+                          f"{'up' if change_60 > 0 else 'down'}"
+                      )
+
+                      alert_text = (
+                          f"{level}\n"
+                          f"{direction}: "
+                          f"{coin}/USDT\n"
+                          f"Цена: "
+                          f"${current:,.8f}\n"
+                          f"30 мин: "
+                          f"{change_30:+.2f}%\n"
+                          f"60 мин: "
+                          f"{change_60:+.2f}%\n"
+                          f"Объём: "
+                          f"{volume_ratio:.1f}x среднего"
+                      )
+
+
+                  # ABNORMAL VOLUME
                   elif (
                       volume_ratio >= 3
                       and abs(change_60) >= 3
                   ):
 
-                      if change_60 > 0:
-                          direction = "📈"
-                      else:
-                          direction = "📉"
-
-                      alerts.append(
-                          f"⚠️ АНОМАЛЬНЫЙ ОБЪЁМ\n"
-                          f"{direction} {coin}/USDT\n"
-                          f"Цена: ${current:,.8f}\n"
-                          f"60 мин: {change_60:+.2f}%\n"
-                          f"Объём: {volume_ratio:.1f}x среднего"
+                      direction = (
+                          "📈"
+                          if change_60 > 0
+                          else "📉"
                       )
 
+                      fingerprint = (
+                          f"{coin}:volume:"
+                          f"{'up' if change_60 > 0 else 'down'}"
+                      )
+
+                      alert_text = (
+                          "⚠️ АНОМАЛЬНЫЙ ОБЪЁМ\n"
+                          f"{direction} "
+                          f"{coin}/USDT\n"
+                          f"Цена: "
+                          f"${current:,.8f}\n"
+                          f"60 мин: "
+                          f"{change_60:+.2f}%\n"
+                          f"Объём: "
+                          f"{volume_ratio:.1f}x среднего"
+                      )
+
+
                   # ==================================================
-                  # NORMAL LOG
+                  # DEDUPLICATION
+                  # ==================================================
+
+                  if (
+                      alert_text
+                      and fingerprint
+                  ):
+
+                      if should_send_alert(
+                          state,
+                          fingerprint
+                      ):
+
+                          alerts_to_send.append(
+                              alert_text
+                          )
+
+                          mark_alert_sent(
+                              state,
+                              fingerprint
+                          )
+
+                          state_changed = True
+
+
+                  # ==================================================
+                  # LOG
                   # ==================================================
 
                   print(
@@ -424,10 +824,12 @@ jobs:
                       f"volume={volume_ratio:.1f}x"
                   )
 
+
               except Exception as error:
 
                   print(
-                      f"{symbol}: ERROR: {error}"
+                      f"{symbol}: ERROR: "
+                      f"{error}"
                   )
 
 
@@ -435,7 +837,7 @@ jobs:
           # SEND ALERTS
           # ============================================================
 
-          if alerts:
+          if alerts_to_send:
 
               now = datetime.now(
                   timezone.utc
@@ -445,21 +847,47 @@ jobs:
 
               message = (
                   "🚀 UNCLE GOO CRYPTO MONITOR\n\n"
-                  + "\n\n".join(alerts)
+                  + "\n\n".join(
+                      alerts_to_send
+                  )
                   + f"\n\n⏱ {now}"
               )
 
-              send_telegram(message)
+              send_telegram(
+                  message
+              )
 
               print("")
-              print("ALERT SENT TO TELEGRAM")
+              print(
+                  "ALERT SENT TO TELEGRAM"
+              )
               print("")
-              print(message)
 
           else:
 
               print("")
-              print("No alerts.")
+              print(
+                  "No new alerts."
+              )
               print("")
+
+
+          # ============================================================
+          # SAVE DEDUPLICATION STATE
+          # ============================================================
+
+          if state_changed:
+
+              save_state(
+                  state
+              )
+
+              save_state_to_github()
+
+          else:
+
+              print(
+                  "No state changes."
+              )
 
           PY
