@@ -2,6 +2,9 @@
   "alerts": {
     "ARBUSDT:SHARP:DOWN": {
       "sent_at": "2026-09-05T21:38:25.617979+00:00"
+    },
+    "ARBUSDT:EXTREME:DOWN": {
+      "sent_at": "2026-09-05T21:51:04.696009+00:00"
     }
   },
   "news": {
