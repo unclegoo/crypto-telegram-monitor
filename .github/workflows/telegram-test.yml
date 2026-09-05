@@ -608,7 +608,7 @@ jobs:
 
               candles = data.get("data", [])
 
-              if len(candles) < 13:
+              if len(candles) < 30:
                   raise RuntimeError(
                       f"Not enough candles for {symbol}"
                   )
