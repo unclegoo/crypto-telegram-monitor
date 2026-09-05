@@ -8,7 +8,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Check Telegram bot
+      - name: Send test message
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
         run: |
@@ -16,17 +16,53 @@ jobs:
           import os
           import json
           import urllib.request
+          import urllib.parse
 
           token = os.environ["TELEGRAM_BOT_TOKEN"]
 
-          url = f"https://api.telegram.org/bot{token}/getMe"
+          api = f"https://api.telegram.org/bot{token}"
 
-          with urllib.request.urlopen(url, timeout=20) as response:
-              data = json.load(response)
+          with urllib.request.urlopen(
+              f"{api}/getUpdates",
+              timeout=20
+          ) as response:
+              updates = json.load(response)
 
-          if not data.get("ok"):
-              raise SystemExit(f"Telegram API error: {data}")
+          if not updates.get("ok"):
+              raise SystemExit(f"Telegram API error: {updates}")
 
-          print("Telegram bot is working")
-          print("Bot:", data["result"]["username"])
+          messages = []
+
+          for update in updates.get("result", []):
+              message = update.get("message")
+              if message and message.get("chat"):
+                  messages.append(message)
+
+          if not messages:
+              raise SystemExit(
+                  "No Telegram messages found. Open the bot and send /start first."
+              )
+
+          chat_id = messages[-1]["chat"]["id"]
+
+          text = "🚀 Uncle Goo Crypto Monitor: тестовое сообщение работает!"
+
+          data = urllib.parse.urlencode({
+              "chat_id": chat_id,
+              "text": text
+          }).encode()
+
+          request = urllib.request.Request(
+              f"{api}/sendMessage",
+              data=data,
+              method="POST"
+          )
+
+          with urllib.request.urlopen(request, timeout=20) as response:
+              result = json.load(response)
+
+          if not result.get("ok"):
+              raise SystemExit(f"Telegram send error: {result}")
+
+          print("Telegram test message sent successfully")
           PY
