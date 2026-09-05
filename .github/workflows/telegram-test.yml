@@ -2,8 +2,19 @@ name: Uncle Goo Crypto Monitor
 
 on:
   workflow_dispatch:
+    inputs:
+      test_telegram:
+        description: "Отправить тестовое сообщение в Telegram"
+        required: false
+        default: false
+        type: boolean
+
   schedule:
     - cron: "*/5 * * * *"
+
+concurrency:
+  group: uncle-goo-crypto-monitor
+  cancel-in-progress: false
 
 jobs:
   monitor:
@@ -11,11 +22,12 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Crypto monitor
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TEST_TELEGRAM: ${{ inputs.test_telegram }}
         run: |
           python - <<'PY'
           import os
@@ -24,84 +36,249 @@ jobs:
           import urllib.parse
           from datetime import datetime, timezone
 
+
+          # ============================================================
+          # SETTINGS
+          # ============================================================
+
           TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 
-          COINS = [
-              "BTC","ETH","XRP","ETC","FIL","ETHFI","ONDO","TWT",
-              "XLM","ARKM","GRAM","STRK","ARB","STX","RENDER","JUP",
-              "PYTH","FET","PEPE","MANTA","ZK","HYPE"
-          ]
+          TEST_TELEGRAM = (
+              os.environ.get("TEST_TELEGRAM", "").lower() == "true"
+          )
 
           BASE = "https://api.bitget.com"
+
+          COINS = [
+              "BTC",
+              "ETH",
+              "XRP",
+              "ETC",
+              "FIL",
+              "ETHFI",
+              "ONDO",
+              "TWT",
+              "XLM",
+              "ARKM",
+              "GRAM",
+              "STRK",
+              "ARB",
+              "STX",
+              "RENDER",
+              "JUP",
+              "PYTH",
+              "FET",
+              "PEPE",
+              "MANTA",
+              "ZK",
+              "HYPE"
+          ]
+
+
+          # ============================================================
+          # HTTP
+          # ============================================================
 
           def get_json(url):
               req = urllib.request.Request(
                   url,
-                  headers={"User-Agent": "Uncle-Goo-Crypto-Monitor/1.0"}
+                  headers={
+                      "User-Agent":
+                      "Uncle-Goo-Crypto-Monitor/1.0"
+                  }
               )
-              with urllib.request.urlopen(req, timeout=20) as r:
-                  return json.loads(r.read().decode())
 
-          def get_candles(symbol):
-              url = BASE + "/api/v3/market/candles?" + urllib.parse.urlencode({
-                  "category": "SPOT",
-                  "symbol": symbol,
-                  "interval": "5m",
-                  "limit": "13"
-              })
+              with urllib.request.urlopen(req, timeout=20) as response:
+                  return json.loads(
+                      response.read().decode("utf-8")
+                  )
 
-              data = get_json(url)
 
-              if data.get("code") != "00000":
-                  return []
-
-              return data.get("data", [])
-
-          def get_chat_id():
-              url = f"https://api.telegram.org/bot{TOKEN}/getUpdates"
-
-              result = get_json(url)
-
-              if not result.get("ok"):
-                  return None
-
-              updates = result.get("result", [])
-
-              # Ищем последнее сообщение пользователя боту
-              for update in reversed(updates):
-                  message = update.get("message")
-
-                  if message and message.get("chat"):
-                      chat = message["chat"]
-
-                      if chat.get("type") == "private":
-                          return chat.get("id")
-
-              return None
-
-          def send_message(chat_id, text):
-              url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
-
-              body = urllib.parse.urlencode({
-                  "chat_id": str(chat_id),
-                  "text": text
-              }).encode()
+          def post_json(url, data):
+              body = urllib.parse.urlencode(data).encode()
 
               req = urllib.request.Request(
                   url,
                   data=body,
-                  method="POST"
+                  method="POST",
+                  headers={
+                      "User-Agent":
+                      "Uncle-Goo-Crypto-Monitor/1.0"
+                  }
               )
 
-              with urllib.request.urlopen(req, timeout=20) as r:
-                  result = json.loads(r.read().decode())
+              with urllib.request.urlopen(req, timeout=20) as response:
+                  return json.loads(
+                      response.read().decode("utf-8")
+                  )
+
+
+          # ============================================================
+          # TELEGRAM
+          # ============================================================
+
+          def prepare_telegram_polling():
+              """
+              If a webhook exists, remove it so getUpdates can work.
+              Pending updates are NOT deleted.
+              """
+
+              url = (
+                  f"https://api.telegram.org/bot"
+                  f"{TOKEN}/getWebhookInfo"
+              )
+
+              result = get_json(url)
 
               if not result.get("ok"):
-                  print("Telegram error:", result)
+                  raise RuntimeError(
+                      f"Telegram getWebhookInfo error: {result}"
+                  )
+
+              webhook_url = result.get("result", {}).get("url", "")
+
+              if webhook_url:
+                  delete_url = (
+                      f"https://api.telegram.org/bot"
+                      f"{TOKEN}/deleteWebhook"
+                  )
+
+                  delete_result = post_json(
+                      delete_url,
+                      {"drop_pending_updates": "false"}
+                  )
+
+                  if not delete_result.get("ok"):
+                      raise RuntimeError(
+                          "Unable to remove Telegram webhook: "
+                          f"{delete_result}"
+                      )
+
+
+          def get_chat_id():
+              """
+              Find the latest private chat that interacted with the bot.
+
+              The user only needs to send /start to the bot once.
+              The numeric chat_id is never printed into GitHub logs.
+              """
+
+              prepare_telegram_polling()
+
+              url = (
+                  f"https://api.telegram.org/bot"
+                  f"{TOKEN}/getUpdates"
+              )
+
+              result = get_json(url)
+
+              if not result.get("ok"):
+                  raise RuntimeError(
+                      f"Telegram getUpdates error: {result}"
+                  )
+
+              updates = result.get("result", [])
+
+              for update in reversed(updates):
+                  message = update.get("message", {})
+                  chat = message.get("chat", {})
+
+                  if chat.get("type") == "private":
+                      chat_id = chat.get("id")
+
+                      if chat_id is not None:
+                          return str(chat_id)
+
+              raise RuntimeError(
+                  "Telegram chat_id not found. "
+                  "Open the bot and send /start first."
+              )
+
+
+          def send_telegram(text):
+              chat_id = get_chat_id()
+
+              url = (
+                  f"https://api.telegram.org/bot"
+                  f"{TOKEN}/sendMessage"
+              )
+
+              result = post_json(
+                  url,
+                  {
+                      "chat_id": chat_id,
+                      "text": text
+                  }
+              )
+
+              if not result.get("ok"):
+                  raise RuntimeError(
+                      f"Telegram sendMessage error: {result}"
+                  )
+
+              print("Telegram message sent successfully.")
+
+
+          # ============================================================
+          # BITGET MARKET DATA
+          # ============================================================
+
+          def get_candles(symbol):
+              url = (
+                  BASE
+                  + "/api/v3/market/candles?"
+                  + urllib.parse.urlencode(
+                      {
+                          "category": "SPOT",
+                          "symbol": symbol,
+                          "interval": "5m",
+                          "limit": "13"
+                      }
+                  )
+              )
+
+              result = get_json(url)
+
+              if result.get("code") != "00000":
+                  raise RuntimeError(
+                      f"Bitget error for {symbol}: {result}"
+                  )
+
+              return result.get("data", [])
+
+
+          # ============================================================
+          # TELEGRAM TEST
+          # ============================================================
+
+          if TEST_TELEGRAM:
+              test_message = (
+                  "🚀 UNCLE GOO CRYPTO MONITOR\n\n"
+                  "✅ Telegram работает.\n"
+                  "✅ Бот успешно получает сообщения.\n"
+                  "✅ Чат найден автоматически.\n"
+                  "✅ Связь с GitHub Actions работает.\n\n"
+                  "После этого теста монитор продолжит "
+                  "работать автоматически каждые 5 минут."
+              )
+
+              send_telegram(test_message)
+
+              print("Telegram test completed successfully.")
+              raise SystemExit(0)
+
+
+          # ============================================================
+          # MARKET MONITOR
+          # ============================================================
 
           alerts = []
 
-          print("Starting crypto monitor...")
+          print("")
+          print("==========================================")
+          print("UNCLE GOO CRYPTO MONITOR")
+          print("==========================================")
+          print("")
 
           for coin in COINS:
 
@@ -111,61 +288,99 @@ jobs:
                   data = get_candles(symbol)
 
                   if len(data) < 13:
-                      print(f"{symbol}: not enough data")
+                      print(
+                          f"{symbol}: not enough candle data"
+                      )
                       continue
 
-                  # Bitget отдаёт новые свечи первыми
+                  # Bitget returns newest candles first.
+                  # Reverse so oldest candle is first.
                   data = list(reversed(data))
+
+                  # 5-minute candles:
+                  #
+                  # data[0]  = approximately 60 minutes ago
+                  # data[6]  = approximately 30 minutes ago
+                  # data[-1] = latest candle
+                  #
+                  # Close price is index 4.
 
                   old_60 = float(data[0][4])
                   old_30 = float(data[6][4])
                   current = float(data[-1][4])
 
-                  change_60 = (current / old_60 - 1) * 100
-                  change_30 = (current / old_30 - 1) * 100
+                  if old_60 <= 0 or old_30 <= 0:
+                      print(
+                          f"{symbol}: invalid price data"
+                      )
+                      continue
 
+                  change_60 = (
+                      (current / old_60) - 1
+                  ) * 100
+
+                  change_30 = (
+                      (current / old_30) - 1
+                  ) * 100
+
+                  # Volume.
+                  # Index 5 = base asset volume.
                   volumes = [
-                      float(x[5])
-                      for x in data[:-1]
+                      float(candle[5])
+                      for candle in data[:-1]
                   ]
 
                   current_volume = float(data[-1][5])
 
                   avg_volume = (
                       sum(volumes) / len(volumes)
-                      if volumes else 0
+                      if volumes
+                      else 0
                   )
 
-                  volume_ratio = (
-                      current_volume / avg_volume
-                      if avg_volume > 0 else 0
-                  )
-
-                  print(
-                      f"{symbol}: "
-                      f"30m={change_30:+.2f}% "
-                      f"60m={change_60:+.2f}% "
-                      f"volume={volume_ratio:.1f}x"
-                  )
+                  if avg_volume > 0:
+                      volume_ratio = (
+                          current_volume / avg_volume
+                      )
+                  else:
+                      volume_ratio = 0
 
                   level = None
 
+                  # ==================================================
+                  # EXTREME MOVE
+                  # ==================================================
+
                   if abs(change_60) >= 12:
+
                       level = "🚨 ЭКСТРЕМАЛЬНОЕ ДВИЖЕНИЕ"
 
+                  # ==================================================
+                  # STRONG MOVE
+                  # ==================================================
+
                   elif abs(change_30) >= 8:
+
                       level = "🔴 СИЛЬНОЕ ДВИЖЕНИЕ"
 
+                  # ==================================================
+                  # SHARP MOVE
+                  # ==================================================
+
                   elif abs(change_60) >= 5:
+
                       level = "🟠 РЕЗКОЕ ДВИЖЕНИЕ"
+
+                  # ==================================================
+                  # ALERT
+                  # ==================================================
 
                   if level:
 
-                      direction = (
-                          "📈 РОСТ"
-                          if change_60 > 0
-                          else "📉 ПАДЕНИЕ"
-                      )
+                      if change_60 > 0:
+                          direction = "📈 РОСТ"
+                      else:
+                          direction = "📉 ПАДЕНИЕ"
 
                       alerts.append(
                           f"{level}\n"
@@ -176,16 +391,19 @@ jobs:
                           f"Объём: {volume_ratio:.1f}x среднего"
                       )
 
+                  # ==================================================
+                  # ABNORMAL VOLUME
+                  # ==================================================
+
                   elif (
                       volume_ratio >= 3
                       and abs(change_60) >= 3
                   ):
 
-                      direction = (
-                          "📈"
-                          if change_60 > 0
-                          else "📉"
-                      )
+                      if change_60 > 0:
+                          direction = "📈"
+                      else:
+                          direction = "📉"
 
                       alerts.append(
                           f"⚠️ АНОМАЛЬНЫЙ ОБЪЁМ\n"
@@ -195,22 +413,33 @@ jobs:
                           f"Объём: {volume_ratio:.1f}x среднего"
                       )
 
-              except Exception as e:
-                  print(f"{symbol}: ERROR: {e}")
+                  # ==================================================
+                  # NORMAL LOG
+                  # ==================================================
 
-          print("")
-          print(f"Alerts found: {len(alerts)}")
+                  print(
+                      f"{symbol}: "
+                      f"30m={change_30:+.2f}% "
+                      f"60m={change_60:+.2f}% "
+                      f"volume={volume_ratio:.1f}x"
+                  )
+
+              except Exception as error:
+
+                  print(
+                      f"{symbol}: ERROR: {error}"
+                  )
+
+
+          # ============================================================
+          # SEND ALERTS
+          # ============================================================
 
           if alerts:
 
-              chat_id = get_chat_id()
-
-              if not chat_id:
-                  print("ERROR: Telegram chat ID not found.")
-                  print("Send /start to the bot and run the workflow again.")
-                  raise SystemExit(1)
-
-              now = datetime.now(timezone.utc).strftime(
+              now = datetime.now(
+                  timezone.utc
+              ).strftime(
                   "%Y-%m-%d %H:%M UTC"
               )
 
@@ -220,11 +449,17 @@ jobs:
                   + f"\n\n⏱ {now}"
               )
 
-              send_message(chat_id, message)
+              send_telegram(message)
 
-              print("Telegram alert sent successfully.")
+              print("")
+              print("ALERT SENT TO TELEGRAM")
+              print("")
+              print(message)
 
           else:
-              print("No alerts. Telegram message not required.")
+
+              print("")
+              print("No alerts.")
+              print("")
 
           PY
