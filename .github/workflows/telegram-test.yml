@@ -35,38 +35,59 @@ jobs:
 
           BASE = "https://api.bitget.com"
 
+          # --------------------------------------------------
+          # HTTP
+          # --------------------------------------------------
+
           def get_json(url):
-              req = urllib.request.Request(
+              request = urllib.request.Request(
                   url,
                   headers={
                       "User-Agent": "Uncle-Goo-Crypto-Monitor/1.0"
                   }
               )
 
-              with urllib.request.urlopen(req, timeout=20) as response:
-                  return json.loads(response.read().decode())
+              with urllib.request.urlopen(
+                  request,
+                  timeout=20
+              ) as response:
+
+                  return json.loads(
+                      response.read().decode()
+                  )
+
+          # --------------------------------------------------
+          # Telegram
+          # --------------------------------------------------
 
           def get_chat_id():
+
               url = (
-                  f"https://api.telegram.org/bot{TOKEN}/getUpdates"
+                  f"https://api.telegram.org/"
+                  f"bot{TOKEN}/getUpdates"
               )
 
               result = get_json(url)
 
               if not result.get("ok"):
-                  raise RuntimeError("Telegram getUpdates error")
+                  raise RuntimeError(
+                      "Telegram getUpdates error"
+                  )
 
               updates = result.get("result", [])
 
               if not updates:
                   raise RuntimeError(
-                      "Telegram chat ID not found. Send /start to the bot."
+                      "Telegram chat ID not found. "
+                      "Send /start to the bot."
                   )
 
               for update in reversed(updates):
+
                   message = update.get("message")
 
                   if message and message.get("chat"):
+
                       return message["chat"]["id"]
 
               raise RuntimeError(
@@ -74,8 +95,10 @@ jobs:
               )
 
           def send_message(chat_id, text):
+
               url = (
-                  f"https://api.telegram.org/bot{TOKEN}/sendMessage"
+                  f"https://api.telegram.org/"
+                  f"bot{TOKEN}/sendMessage"
               )
 
               body = urllib.parse.urlencode({
@@ -89,15 +112,55 @@ jobs:
                   method="POST"
               )
 
-              with urllib.request.urlopen(request, timeout=20) as response:
-                  result = json.loads(response.read().decode())
+              with urllib.request.urlopen(
+                  request,
+                  timeout=20
+              ) as response:
+
+                  result = json.loads(
+                      response.read().decode()
+                  )
 
               if not result.get("ok"):
+
                   raise RuntimeError(
                       f"Telegram error: {result}"
                   )
 
+          # --------------------------------------------------
+          # Bitget
+          # --------------------------------------------------
+
+          def get_available_symbols():
+
+              url = (
+                  BASE +
+                  "/api/v2/spot/public/symbols"
+              )
+
+              result = get_json(url)
+
+              if result.get("code") != "00000":
+
+                  raise RuntimeError(
+                      "Cannot get Bitget symbols"
+                  )
+
+              symbols = set()
+
+              for item in result.get("data", []):
+
+                  symbol = item.get("symbol")
+
+                  if symbol:
+                      symbols.add(
+                          symbol.upper()
+                      )
+
+              return symbols
+
           def get_candles(symbol):
+
               params = urllib.parse.urlencode({
                   "category": "SPOT",
                   "symbol": symbol,
@@ -118,49 +181,81 @@ jobs:
 
               return result.get("data", [])
 
-          def get_available_symbols():
-              url = (
-                  BASE +
-                  "/api/v2/spot/public/symbols"
+          # --------------------------------------------------
+          # Calculate coin statistics
+          # --------------------------------------------------
+
+          def calculate(data):
+
+              if len(data) < 13:
+                  return None
+
+              # Bitget returns newest candle first.
+              data = list(reversed(data))
+
+              price_60m = float(data[0][4])
+              price_30m = float(data[6][4])
+              current_price = float(data[-1][4])
+
+              change_60m = (
+                  current_price / price_60m - 1
+              ) * 100
+
+              change_30m = (
+                  current_price / price_30m - 1
+              ) * 100
+
+              volumes = [
+                  float(candle[5])
+                  for candle in data[:-1]
+              ]
+
+              current_volume = float(data[-1][5])
+
+              average_volume = (
+                  sum(volumes) / len(volumes)
               )
 
-              result = get_json(url)
+              if average_volume > 0:
 
-              if result.get("code") != "00000":
-                  raise RuntimeError(
-                      "Cannot get Bitget symbols"
+                  volume_ratio = (
+                      current_volume /
+                      average_volume
                   )
 
-              symbols = set()
+              else:
 
-              for item in result.get("data", []):
-                  symbol = item.get("symbol")
+                  volume_ratio = 0
 
-                  if symbol:
-                      symbols.add(symbol.upper())
-
-              return symbols
+              return {
+                  "price": current_price,
+                  "change_30m": change_30m,
+                  "change_60m": change_60m,
+                  "volume_ratio": volume_ratio
+              }
 
           # --------------------------------------------------
-          # Telegram
+          # Start
           # --------------------------------------------------
 
           chat_id = get_chat_id()
 
-          # --------------------------------------------------
-          # Bitget
-          # --------------------------------------------------
-
           available_symbols = get_available_symbols()
 
-          alerts = []
+          stats = {}
+
           unavailable = []
+
+          # --------------------------------------------------
+          # Read all coins
+          # --------------------------------------------------
 
           for coin in COINS:
 
               symbol = coin + "USDT"
 
               if symbol not in available_symbols:
+
                   unavailable.append(coin)
                   continue
 
@@ -168,103 +263,23 @@ jobs:
 
                   data = get_candles(symbol)
 
-                  if len(data) < 13:
+                  result = calculate(data)
+
+                  if result is None:
+
                       print(
-                          f"{symbol}: insufficient candle data"
+                          f"{symbol}: insufficient data"
                       )
+
                       continue
 
-                  # Bitget returns newest candle first.
-                  data = list(reversed(data))
-
-                  price_60m = float(data[0][4])
-                  price_30m = float(data[6][4])
-                  current_price = float(data[-1][4])
-
-                  change_60m = (
-                      current_price / price_60m - 1
-                  ) * 100
-
-                  change_30m = (
-                      current_price / price_30m - 1
-                  ) * 100
-
-                  volumes = [
-                      float(candle[5])
-                      for candle in data[:-1]
-                  ]
-
-                  current_volume = float(data[-1][5])
-
-                  average_volume = (
-                      sum(volumes) / len(volumes)
-                  )
-
-                  if average_volume > 0:
-                      volume_ratio = (
-                          current_volume /
-                          average_volume
-                      )
-                  else:
-                      volume_ratio = 0
-
-                  level = None
-
-                  if abs(change_60m) >= 12:
-                      level = (
-                          "🚨 ЭКСТРЕМАЛЬНОЕ ДВИЖЕНИЕ"
-                      )
-
-                  elif abs(change_30m) >= 8:
-                      level = (
-                          "🔴 СИЛЬНОЕ ДВИЖЕНИЕ"
-                      )
-
-                  elif abs(change_60m) >= 5:
-                      level = (
-                          "🟠 РЕЗКОЕ ДВИЖЕНИЕ"
-                      )
-
-                  if level:
-
-                      direction = (
-                          "📈 РОСТ"
-                          if change_60m > 0
-                          else "📉 ПАДЕНИЕ"
-                      )
-
-                      alerts.append(
-                          f"{level}\n"
-                          f"{direction}: {coin}/USDT\n"
-                          f"Цена: ${current_price:,.8f}\n"
-                          f"30 мин: {change_30m:+.2f}%\n"
-                          f"60 мин: {change_60m:+.2f}%\n"
-                          f"Объём: {volume_ratio:.1f}x среднего"
-                      )
-
-                  elif (
-                      volume_ratio >= 3 and
-                      abs(change_60m) >= 3
-                  ):
-
-                      direction = (
-                          "📈" if change_60m > 0
-                          else "📉"
-                      )
-
-                      alerts.append(
-                          "⚠️ АНОМАЛЬНЫЙ ОБЪЁМ\n"
-                          f"{direction} {coin}/USDT\n"
-                          f"Цена: ${current_price:,.8f}\n"
-                          f"60 мин: {change_60m:+.2f}%\n"
-                          f"Объём: {volume_ratio:.1f}x среднего"
-                      )
+                  stats[coin] = result
 
                   print(
                       f"{symbol}: "
-                      f"30m={change_30m:+.2f}% "
-                      f"60m={change_60m:+.2f}% "
-                      f"volume={volume_ratio:.1f}x"
+                      f"30m={result['change_30m']:+.2f}% "
+                      f"60m={result['change_60m']:+.2f}% "
+                      f"volume={result['volume_ratio']:.1f}x"
                   )
 
               except Exception as error:
@@ -274,7 +289,179 @@ jobs:
                   )
 
           # --------------------------------------------------
-          # Telegram message
+          # BTC baseline
+          # --------------------------------------------------
+
+          btc = stats.get("BTC")
+
+          if not btc:
+
+              raise RuntimeError(
+                  "BTC data unavailable"
+              )
+
+          btc_30 = btc["change_30m"]
+          btc_60 = btc["change_60m"]
+
+          # --------------------------------------------------
+          # Alerts
+          # --------------------------------------------------
+
+          alerts = []
+
+          for coin, result in stats.items():
+
+              if coin == "BTC":
+                  continue
+
+              change_30 = result["change_30m"]
+              change_60 = result["change_60m"]
+
+              relative_30 = (
+                  change_30 - btc_30
+              )
+
+              relative_60 = (
+                  change_60 - btc_60
+              )
+
+              # ----------------------------------------------
+              # Strong relative movement
+              # ----------------------------------------------
+
+              if (
+                  abs(relative_60) >= 4 or
+                  abs(relative_30) >= 3
+              ):
+
+                  if (
+                      abs(relative_30) >=
+                      abs(relative_60)
+                  ):
+
+                      relative = relative_30
+                      period = "30 мин"
+
+                      coin_move = change_30
+                      btc_move = btc_30
+
+                  else:
+
+                      relative = relative_60
+                      period = "60 мин"
+
+                      coin_move = change_60
+                      btc_move = btc_60
+
+                  if relative > 0:
+
+                      title = (
+                          "⚡ ОПЕРЕЖЕНИЕ BTC"
+                      )
+
+                  else:
+
+                      title = (
+                          "⚠️ ОТСТАВАНИЕ ОТ BTC"
+                      )
+
+                  alerts.append(
+                      f"{title}\n"
+                      f"{coin}/USDT\n"
+                      f"{period}: "
+                      f"{coin_move:+.2f}%\n"
+                      f"BTC: "
+                      f"{btc_move:+.2f}%\n"
+                      f"Относительно BTC: "
+                      f"{relative:+.2f} п.п.\n"
+                      f"Цена: "
+                      f"${result['price']:,.8f}\n"
+                      f"Объём: "
+                      f"{result['volume_ratio']:.1f}x среднего"
+                  )
+
+          # --------------------------------------------------
+          # Normal price alerts
+          # --------------------------------------------------
+
+          for coin, result in stats.items():
+
+              change_30 = result["change_30m"]
+              change_60 = result["change_60m"]
+
+              volume_ratio = result[
+                  "volume_ratio"
+              ]
+
+              level = None
+
+              if abs(change_60) >= 12:
+
+                  level = (
+                      "🚨 ЭКСТРЕМАЛЬНОЕ ДВИЖЕНИЕ"
+                  )
+
+              elif abs(change_30) >= 8:
+
+                  level = (
+                      "🔴 СИЛЬНОЕ ДВИЖЕНИЕ"
+                  )
+
+              elif abs(change_60) >= 5:
+
+                  level = (
+                      "🟠 РЕЗКОЕ ДВИЖЕНИЕ"
+                  )
+
+              if level:
+
+                  direction = (
+                      "📈 РОСТ"
+                      if change_60 > 0
+                      else "📉 ПАДЕНИЕ"
+                  )
+
+                  alerts.append(
+                      f"{level}\n"
+                      f"{direction}: {coin}/USDT\n"
+                      f"Цена: "
+                      f"${result['price']:,.8f}\n"
+                      f"30 мин: "
+                      f"{change_30:+.2f}%\n"
+                      f"60 мин: "
+                      f"{change_60:+.2f}%\n"
+                      f"BTC 60 мин: "
+                      f"{btc_60:+.2f}%\n"
+                      f"Объём: "
+                      f"{volume_ratio:.1f}x среднего"
+                  )
+
+              elif (
+                  volume_ratio >= 3 and
+                  abs(change_60) >= 3
+              ):
+
+                  direction = (
+                      "📈"
+                      if change_60 > 0
+                      else "📉"
+                  )
+
+                  alerts.append(
+                      "⚠️ АНОМАЛЬНЫЙ ОБЪЁМ\n"
+                      f"{direction} {coin}/USDT\n"
+                      f"Цена: "
+                      f"${result['price']:,.8f}\n"
+                      f"60 мин: "
+                      f"{change_60:+.2f}%\n"
+                      f"BTC 60 мин: "
+                      f"{btc_60:+.2f}%\n"
+                      f"Объём: "
+                      f"{volume_ratio:.1f}x среднего"
+                  )
+
+          # --------------------------------------------------
+          # Send Telegram
           # --------------------------------------------------
 
           if alerts:
@@ -290,13 +477,20 @@ jobs:
                   +
                   "\n\n".join(alerts)
                   +
-                  f"\n\n⏱ {now}"
+                  "\n\n"
+                  f"BTC 30 мин: "
+                  f"{btc_30:+.2f}%\n"
+                  f"BTC 60 мин: "
+                  f"{btc_60:+.2f}%\n"
+                  f"⏱ {now}"
               )
 
               if unavailable:
+
                   message += (
                       "\n\n⚠️ Нет пары на Bitget: "
-                      + ", ".join(unavailable)
+                      +
+                      ", ".join(unavailable)
                   )
 
               send_message(
@@ -304,7 +498,9 @@ jobs:
                   message
               )
 
-              print("\n" + message)
+              print(
+                  "\n" + message
+              )
 
           else:
 
@@ -313,9 +509,11 @@ jobs:
               )
 
               if unavailable:
+
                   print(
                       "Unavailable on Bitget: "
-                      + ", ".join(unavailable)
+                      +
+                      ", ".join(unavailable)
                   )
 
           PY
