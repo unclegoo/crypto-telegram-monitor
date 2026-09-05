@@ -597,7 +597,7 @@ jobs:
                       "category": "SPOT",
                       "symbol": symbol,
                       "interval": "5m",
-                      "limit": 13,
+                      "limit": 30,
                   }
               )
 
@@ -608,7 +608,7 @@ jobs:
 
               candles = data.get("data", [])
 
-              if len(candles) < 30:
+              if len(candles) < 13:
                   raise RuntimeError(
                       f"Not enough candles for {symbol}"
                   )
