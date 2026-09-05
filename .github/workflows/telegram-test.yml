@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       test_telegram:
-        description: "Отправить тестовое сообщение в Telegram"
+        description: "Send Telegram test message"
         required: false
         default: false
         type: boolean
@@ -16,8 +16,8 @@ permissions:
   contents: write
 
 concurrency:
-  group: uncle-goo-crypto-monitor
-  cancel-in-progress: false
+  group: crypto-monitor
+  cancel-in-progress: true
 
 jobs:
   monitor:
@@ -26,60 +26,332 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
 
       - name: Crypto monitor
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TEST_TELEGRAM: ${{ inputs.test_telegram }}
         run: |
-          python - <<'PY'
+          python3 <<'PY'
           import os
           import json
+          import time
+          import hashlib
+          import re
+          import subprocess
           import urllib.request
           import urllib.parse
-          import subprocess
+          import xml.etree.ElementTree as ET
           from datetime import datetime, timezone, timedelta
+          from email.utils import parsedate_to_datetime
 
 
           # ============================================================
-          # SETTINGS
+          # CONFIG
           # ============================================================
 
-          TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
-
-          TEST_TELEGRAM = (
-              os.environ.get("TEST_TELEGRAM", "").lower() == "true"
-          )
-
-          BASE = "https://api.bitget.com"
+          TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+          TEST_TELEGRAM = os.environ.get("TEST_TELEGRAM", "").lower() == "true"
 
           STATE_FILE = ".crypto_monitor_state.json"
 
+          # Market
+          BITGET_URL = "https://api.bitget.com/api/v3/market/candles"
+
+          # News
+          NEWS_FEEDS = [
+              (
+                  "CoinDesk",
+                  "https://www.coindesk.com/arc/outboundfeeds/rss/"
+              ),
+              (
+                  "Cointelegraph",
+                  "https://cointelegraph.com/?format=rss"
+              ),
+          ]
+
+          NEWS_LOOKBACK_HOURS = 2
+          MAX_NEWS_ALERTS_PER_RUN = 3
+          NEWS_TIMEOUT = 20
+
+          # Alert cooldown
           ALERT_COOLDOWN_MINUTES = 60
 
-          COINS = [
-              "BTC",
-              "ETH",
-              "XRP",
-              "ETC",
-              "FIL",
-              "ETHFI",
-              "ONDO",
-              "TWT",
-              "XLM",
-              "ARKM",
-              "GRAM",
-              "STRK",
-              "ARB",
-              "STX",
-              "RENDER",
-              "JUP",
-              "PYTH",
-              "FET",
-              "PEPE",
-              "MANTA",
-              "ZK",
-              "HYPE"
+          # Price thresholds
+          EXTREME_60 = 12.0
+          STRONG_30 = 8.0
+          SHARP_60 = 5.0
+          ABNORMAL_VOLUME_RATIO = 3.0
+          ABNORMAL_VOLUME_MOVE = 3.0
+
+
+          # ============================================================
+          # COINS
+          # ============================================================
+
+          SYMBOLS = [
+              "BTCUSDT",
+              "ETHUSDT",
+              "XRPUSDT",
+              "ETCUSDT",
+              "FILUSDT",
+              "ETHFIUSDT",
+              "ONDOUSDT",
+              "TWTUSDT",
+              "XLMUSDT",
+              "ARKMUSDT",
+              "GRAMUSDT",
+              "STRKUSDT",
+              "ARBUSDT",
+              "STXUSDT",
+              "RENDERUSDT",
+              "JUPUSDT",
+              "PYTHUSDT",
+              "FETUSDT",
+              "PEPEUSDT",
+              "MANTAUSDT",
+              "ZKUSDT",
+              "HYPEUSDT",
+          ]
+
+
+          # ============================================================
+          # NEWS KEYWORDS
+          # ============================================================
+
+          NEWS_KEYWORDS = {
+              "BTC": [
+                  "bitcoin",
+                  "btc"
+              ],
+
+              "ETH": [
+                  "ethereum",
+                  "ether",
+                  "eth"
+              ],
+
+              "XRP": [
+                  "xrp",
+                  "ripple"
+              ],
+
+              "ETC": [
+                  "ethereum classic"
+              ],
+
+              "FIL": [
+                  "filecoin"
+              ],
+
+              "ETHFI": [
+                  "ether.fi",
+                  "etherfi",
+                  "ethfi"
+              ],
+
+              "ONDO": [
+                  "ondo finance",
+                  "ondo"
+              ],
+
+              "TWT": [
+                  "trust wallet",
+                  "trustwallet",
+                  "twt"
+              ],
+
+              "XLM": [
+                  "stellar",
+                  "xlm"
+              ],
+
+              "ARKM": [
+                  "arkham",
+                  "arkm"
+              ],
+
+              "GRAM": [
+                  "gram token",
+                  "gram cryptocurrency",
+                  "gram crypto"
+              ],
+
+              "STRK": [
+                  "starknet",
+                  "strk"
+              ],
+
+              "ARB": [
+                  "arbitrum"
+              ],
+
+              "STX": [
+                  "stacks"
+              ],
+
+              "RENDER": [
+                  "render network",
+                  "render token"
+              ],
+
+              "JUP": [
+                  "jupiter exchange",
+                  "jupiter crypto",
+                  "jupiter"
+              ],
+
+              "PYTH": [
+                  "pyth network",
+                  "pyth"
+              ],
+
+              "FET": [
+                  "fetch.ai",
+                  "fetch ai",
+                  "artificial superintelligence alliance"
+              ],
+
+              "PEPE": [
+                  "pepe coin",
+                  "pepe token",
+                  "pepe crypto"
+              ],
+
+              "MANTA": [
+                  "manta network",
+                  "manta"
+              ],
+
+              "ZK": [
+                  "zksync",
+                  "zk sync"
+              ],
+
+              "HYPE": [
+                  "hyperliquid"
+              ],
+          }
+
+
+          # ============================================================
+          # IMPORTANT NEWS SIGNALS
+          # ============================================================
+
+          NEWS_SIGNALS = [
+              (
+                  "🚨 SECURITY",
+                  [
+                      "hack",
+                      "hacked",
+                      "exploit",
+                      "exploited",
+                      "vulnerability",
+                      "breach",
+                      "stolen",
+                      "stole",
+                      "attack",
+                      "attacked",
+                      "drained",
+                      "compromised",
+                      "security flaw",
+                      "funds stolen",
+                      "network halted",
+                  ],
+              ),
+
+              (
+                  "🔴 LISTING / DELISTING",
+                  [
+                      "listing",
+                      "listed",
+                      "delisting",
+                      "delisted",
+                      "trading support",
+                      "adds support",
+                      "removed from",
+                  ],
+              ),
+
+              (
+                  "⚖️ REGULATION",
+                  [
+                      "sec",
+                      "cftc",
+                      "regulator",
+                      "regulation",
+                      "regulatory",
+                      "lawsuit",
+                      "court",
+                      "legal",
+                      "ban",
+                      "banned",
+                      "approval",
+                      "etf",
+                  ],
+              ),
+
+              (
+                  "🔓 TOKEN UNLOCK",
+                  [
+                      "token unlock",
+                      "unlock",
+                      "unlocks",
+                      "vesting",
+                      "tokens released",
+                  ],
+              ),
+
+              (
+                  "🏦 INSTITUTIONAL",
+                  [
+                      "institutional",
+                      "institution",
+                      "asset manager",
+                      "etf",
+                      "treasury",
+                      "fund",
+                  ],
+              ),
+
+              (
+                  "💰 FUNDING / INVESTMENT",
+                  [
+                      "funding",
+                      "investment",
+                      "investor",
+                      "raises",
+                      "raised",
+                      "financing",
+                      "capital",
+                  ],
+              ),
+
+              (
+                  "🤝 PARTNERSHIP",
+                  [
+                      "partnership",
+                      "partner",
+                      "partners",
+                      "integration",
+                      "collaboration",
+                  ],
+              ),
+
+              (
+                  "🚀 NETWORK UPDATE",
+                  [
+                      "upgrade",
+                      "hard fork",
+                      "mainnet",
+                      "testnet",
+                      "launch",
+                      "released",
+                      "release",
+                  ],
+              ),
           ]
 
 
@@ -87,166 +359,93 @@ jobs:
           # HTTP
           # ============================================================
 
-          def get_json(url):
-              req = urllib.request.Request(
+          def http_get_json(url, params=None, timeout=20):
+              if params:
+                  url += "?" + urllib.parse.urlencode(params)
+
+              request = urllib.request.Request(
                   url,
                   headers={
-                      "User-Agent":
-                      "Uncle-Goo-Crypto-Monitor/1.0"
+                      "User-Agent": "Uncle-Goo-Crypto-Monitor/1.0"
                   }
               )
 
-              with urllib.request.urlopen(
-                  req,
-                  timeout=20
-              ) as response:
-
-                  return json.loads(
-                      response.read().decode("utf-8")
-                  )
+              with urllib.request.urlopen(request, timeout=timeout) as response:
+                  return json.loads(response.read().decode("utf-8"))
 
 
-          def post_json(url, data):
-              body = urllib.parse.urlencode(
-                  data
-              ).encode()
-
-              req = urllib.request.Request(
+          def http_get_text(url, timeout=20):
+              request = urllib.request.Request(
                   url,
-                  data=body,
-                  method="POST",
                   headers={
-                      "User-Agent":
-                      "Uncle-Goo-Crypto-Monitor/1.0"
+                      "User-Agent": "Mozilla/5.0 Uncle-Goo-Crypto-Monitor/1.0",
+                      "Accept": "application/rss+xml, application/xml, text/xml, */*",
                   }
               )
 
-              with urllib.request.urlopen(
-                  req,
-                  timeout=20
-              ) as response:
-
-                  return json.loads(
-                      response.read().decode("utf-8")
-                  )
+              with urllib.request.urlopen(request, timeout=timeout) as response:
+                  return response.read()
 
 
           # ============================================================
           # TELEGRAM
           # ============================================================
 
-          def prepare_telegram_polling():
+          def telegram_api(method, payload=None):
+              url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/{method}"
 
-              url = (
-                  f"https://api.telegram.org/bot"
-                  f"{TOKEN}/getWebhookInfo"
-              )
+              data = None
 
-              result = get_json(url)
+              if payload is not None:
+                  data = urllib.parse.urlencode(payload).encode("utf-8")
 
-              if not result.get("ok"):
-                  raise RuntimeError(
-                      f"Telegram getWebhookInfo error: {result}"
-                  )
-
-              webhook_url = (
-                  result
-                  .get("result", {})
-                  .get("url", "")
-              )
-
-              if webhook_url:
-
-                  delete_url = (
-                      f"https://api.telegram.org/bot"
-                      f"{TOKEN}/deleteWebhook"
-                  )
-
-                  delete_result = post_json(
-                      delete_url,
-                      {
-                          "drop_pending_updates": "false"
-                      }
-                  )
-
-                  if not delete_result.get("ok"):
-                      raise RuntimeError(
-                          "Unable to remove Telegram webhook: "
-                          f"{delete_result}"
-                      )
-
-
-          def get_chat_id():
-
-              prepare_telegram_polling()
-
-              url = (
-                  f"https://api.telegram.org/bot"
-                  f"{TOKEN}/getUpdates"
-              )
-
-              result = get_json(url)
-
-              if not result.get("ok"):
-                  raise RuntimeError(
-                      f"Telegram getUpdates error: {result}"
-                  )
-
-              updates = result.get(
-                  "result",
-                  []
-              )
-
-              for update in reversed(updates):
-
-                  message = update.get(
-                      "message",
-                      {}
-                  )
-
-                  chat = message.get(
-                      "chat",
-                      {}
-                  )
-
-                  if chat.get("type") == "private":
-
-                      chat_id = chat.get("id")
-
-                      if chat_id is not None:
-                          return str(chat_id)
-
-              raise RuntimeError(
-                  "Telegram chat_id not found. "
-                  "Open the bot and send /start first."
-              )
-
-
-          def send_telegram(text):
-
-              chat_id = get_chat_id()
-
-              url = (
-                  f"https://api.telegram.org/bot"
-                  f"{TOKEN}/sendMessage"
-              )
-
-              result = post_json(
+              request = urllib.request.Request(
                   url,
-                  {
-                      "chat_id": chat_id,
-                      "text": text
+                  data=data,
+                  headers={
+                      "User-Agent": "Uncle-Goo-Crypto-Monitor/1.0"
                   }
               )
 
-              if not result.get("ok"):
-                  raise RuntimeError(
-                      f"Telegram sendMessage error: {result}"
-                  )
+              with urllib.request.urlopen(request, timeout=20) as response:
+                  return json.loads(response.read().decode("utf-8"))
 
-              print(
-                  "Telegram message sent successfully."
+
+          def get_chat_id():
+              result = telegram_api("getUpdates")
+
+              updates = result.get("result", [])
+
+              if not updates:
+                  return None
+
+              for update in reversed(updates):
+                  message = update.get("message")
+
+                  if message and message.get("chat"):
+                      return message["chat"]["id"]
+
+              return None
+
+
+          def send_telegram(text):
+              chat_id = get_chat_id()
+
+              if chat_id is None:
+                  print("Telegram chat ID not found.")
+                  print("Send /start to the bot first.")
+                  return False
+
+              result = telegram_api(
+                  "sendMessage",
+                  {
+                      "chat_id": chat_id,
+                      "text": text,
+                      "disable_web_page_preview": False,
+                  }
               )
+
+              return result.get("ok", False)
 
 
           # ============================================================
@@ -254,568 +453,728 @@ jobs:
           # ============================================================
 
           def load_state():
-
-              if not os.path.exists(
-                  STATE_FILE
-              ):
-
-                  return {}
+              if not os.path.exists(STATE_FILE):
+                  return {
+                      "alerts": {},
+                      "news": {}
+                  }
 
               try:
+                  with open(STATE_FILE, "r", encoding="utf-8") as f:
+                      raw = json.load(f)
 
-                  with open(
-                      STATE_FILE,
-                      "r",
-                      encoding="utf-8"
-                  ) as file:
+                  # Migration from previous version
+                  if "alerts" not in raw and "news" not in raw:
+                      return {
+                          "alerts": raw,
+                          "news": {}
+                      }
 
-                      data = json.load(file)
+                  raw.setdefault("alerts", {})
+                  raw.setdefault("news", {})
 
-                  if isinstance(data, dict):
-                      return data
+                  return raw
 
-              except Exception as error:
-
-                  print(
-                      f"State read error: {error}"
-                  )
-
-              return {}
+              except Exception:
+                  return {
+                      "alerts": {},
+                      "news": {}
+                  }
 
 
           def save_state(state):
-
-              with open(
-                  STATE_FILE,
-                  "w",
-                  encoding="utf-8"
-              ) as file:
-
+              with open(STATE_FILE, "w", encoding="utf-8") as f:
                   json.dump(
                       state,
-                      file,
+                      f,
                       ensure_ascii=False,
                       indent=2
                   )
 
 
-          def should_send_alert(
-              state,
-              fingerprint
-          ):
-
-              item = state.get(
-                  fingerprint
+          def save_state_to_github():
+              subprocess.run(
+                  [
+                      "git",
+                      "config",
+                      "user.name",
+                      "github-actions[bot]"
+                  ],
+                  check=True
               )
+
+              subprocess.run(
+                  [
+                      "git",
+                      "config",
+                      "user.email",
+                      "41898282+github-actions[bot]@users.noreply.github.com"
+                  ],
+                  check=True
+              )
+
+              subprocess.run(
+                  [
+                      "git",
+                      "add",
+                      STATE_FILE
+                  ],
+                  check=True
+              )
+
+              result = subprocess.run(
+                  [
+                      "git",
+                      "diff",
+                      "--cached",
+                      "--quiet"
+                  )
+
+              if result.returncode == 0:
+                  return
+
+              subprocess.run(
+                  [
+                      "git",
+                      "commit",
+                      "-m",
+                      "Update crypto monitor state"
+                  ],
+                  check=True
+              )
+
+              subprocess.run(
+                  [
+                      "git",
+                      "push"
+                  ],
+                  check=True
+              )
+
+
+          # ============================================================
+          # PRICE ALERT DEDUP
+          # ============================================================
+
+          def should_send_alert(state, fingerprint):
+              item = state["alerts"].get(fingerprint)
 
               if not item:
                   return True
 
-              last_sent = item.get(
-                  "sent_at"
-              )
-
-              if not last_sent:
-                  return True
-
               try:
-
-                  last_time = datetime.fromisoformat(
-                      last_sent
+                  sent_at = datetime.fromisoformat(
+                      item["sent_at"]
                   )
 
+                  now = datetime.now(timezone.utc)
+
+                  age = (
+                      now - sent_at
+                  ).total_seconds() / 60
+
+                  return age >= ALERT_COOLDOWN_MINUTES
+
               except Exception:
-
                   return True
 
-              now = datetime.now(
-                  timezone.utc
-              )
 
-              elapsed = (
-                  now - last_time
-              ).total_seconds() / 60
-
-              if elapsed >= ALERT_COOLDOWN_MINUTES:
-                  return True
-
-              remaining = (
-                  ALERT_COOLDOWN_MINUTES
-                  - elapsed
-              )
-
-              print(
-                  f"Duplicate suppressed: "
-                  f"{fingerprint} "
-                  f"({remaining:.0f} min remaining)"
-              )
-
-              return False
-
-
-          def mark_alert_sent(
-              state,
-              fingerprint
-          ):
-
-              state[fingerprint] = {
-                  "sent_at": datetime.now(
-                      timezone.utc
-                  ).isoformat()
+          def mark_alert_sent(state, fingerprint):
+              state["alerts"][fingerprint] = {
+                  "sent_at": datetime.now(timezone.utc).isoformat()
               }
 
 
           # ============================================================
-          # SAVE STATE TO GITHUB
-          # ============================================================
-
-          def save_state_to_github():
-
-              try:
-
-                  subprocess.run(
-                      [
-                          "git",
-                          "config",
-                          "user.name",
-                          "github-actions[bot]"
-                      ],
-                      check=True
-                  )
-
-                  subprocess.run(
-                      [
-                          "git",
-                          "config",
-                          "user.email",
-                          "41898282+github-actions[bot]"
-                          "@users.noreply.github.com"
-                      ],
-                      check=True
-                  )
-
-                  subprocess.run(
-                      [
-                          "git",
-                          "add",
-                          STATE_FILE
-                      ],
-                      check=True
-                  )
-
-                  result = subprocess.run(
-                      [
-                          "git",
-                          "diff",
-                          "--cached",
-                          "--quiet"
-                      ]
-                  )
-
-                  if result.returncode == 0:
-
-                      print(
-                          "State unchanged."
-                      )
-
-                      return
-
-                  subprocess.run(
-                      [
-                          "git",
-                          "commit",
-                          "-m",
-                          "Update crypto monitor state"
-                      ],
-                      check=True
-                  )
-
-                  subprocess.run(
-                      [
-                          "git",
-                          "push"
-                      ],
-                      check=True
-                  )
-
-                  print(
-                      "State saved to GitHub."
-                  )
-
-              except Exception as error:
-
-                  print(
-                      f"State GitHub save error: {error}"
-                  )
-                  raise
-
-
-          # ============================================================
-          # BITGET
+          # BITGET MARKET DATA
           # ============================================================
 
           def get_candles(symbol):
-
-              url = (
-                  BASE
-                  + "/api/v3/market/candles?"
-                  + urllib.parse.urlencode(
-                      {
-                          "category": "SPOT",
-                          "symbol": symbol,
-                          "interval": "5m",
-                          "limit": "13"
-                      }
-                  )
+              data = http_get_json(
+                  BITGET_URL,
+                  {
+                      "category": "SPOT",
+                      "symbol": symbol,
+                      "interval": "5m",
+                      "limit": 13,
+                  }
               )
 
-              result = get_json(
-                  url
-              )
-
-              if result.get("code") != "00000":
-
+              if data.get("code") != "00000":
                   raise RuntimeError(
-                      f"Bitget error for {symbol}: "
-                      f"{result}"
+                      f"Bitget error: {data}"
                   )
 
-              return result.get(
-                  "data",
-                  []
-              )
+              candles = data.get("data", [])
+
+              if len(candles) < 13:
+                  raise RuntimeError(
+                      f"Not enough candles for {symbol}"
+                  )
+
+              # Bitget normally returns newest first.
+              candles = list(reversed(candles))
+
+              closes = [
+                  float(c[4])
+                  for c in candles
+              ]
+
+              volumes = [
+                  float(c[5])
+                  for c in candles
+              ]
+
+              return closes, volumes
+
+
+          def calculate_market(symbol):
+              closes, volumes = get_candles(symbol)
+
+              price_now = closes[-1]
+
+              price_30 = closes[-7]
+              price_60 = closes[-13]
+
+              change_30 = (
+                  (price_now / price_30) - 1
+              ) * 100
+
+              change_60 = (
+                  (price_now / price_60) - 1
+              ) * 100
+
+              current_volume = sum(volumes[-6:])
+              previous_volume = sum(volumes[-12:-6])
+
+              if previous_volume > 0:
+                  volume_ratio = (
+                      current_volume / previous_volume
+                  )
+              else:
+                  volume_ratio = 0
+
+              return {
+                  "price": price_now,
+                  "change_30": change_30,
+                  "change_60": change_60,
+                  "volume_ratio": volume_ratio,
+              }
 
 
           # ============================================================
-          # TELEGRAM TEST
+          # NEWS
+          # ============================================================
+
+          def clean_text(text):
+              if not text:
+                  return ""
+
+              text = re.sub(
+                  r"<[^>]+>",
+                  " ",
+                  text
+              )
+
+              text = re.sub(
+                  r"\s+",
+                  " ",
+                  text
+              )
+
+              return text.strip()
+
+
+          def parse_date(value):
+              if not value:
+                  return None
+
+              value = value.strip()
+
+              try:
+                  dt = parsedate_to_datetime(value)
+
+                  if dt.tzinfo is None:
+                      dt = dt.replace(
+                          tzinfo=timezone.utc
+                      )
+
+                  return dt.astimezone(timezone.utc)
+
+              except Exception:
+                  pass
+
+              try:
+                  value2 = value.replace(
+                      "Z",
+                      "+00:00"
+                  )
+
+                  dt = datetime.fromisoformat(
+                      value2
+                  )
+
+                  if dt.tzinfo is None:
+                      dt = dt.replace(
+                          tzinfo=timezone.utc
+                      )
+
+                  return dt.astimezone(timezone.utc)
+
+              except Exception:
+                  return None
+
+
+          def parse_feed(source, url):
+              try:
+                  raw = http_get_text(
+                      url,
+                      NEWS_TIMEOUT
+                  )
+
+                  root = ET.fromstring(raw)
+
+              except Exception as e:
+                  print(
+                      f"News feed error [{source}]: {e}"
+                  )
+                  return []
+
+              articles = []
+
+              # RSS
+              for item in root.findall(".//item"):
+                  title = clean_text(
+                      item.findtext("title")
+                  )
+
+                  link = clean_text(
+                      item.findtext("link")
+                  )
+
+                  guid = clean_text(
+                      item.findtext("guid")
+                  )
+
+                  description = clean_text(
+                      item.findtext("description")
+                  )
+
+                  pub_date = clean_text(
+                      item.findtext("pubDate")
+                  )
+
+                  published = parse_date(
+                      pub_date
+                  )
+
+                  if not link:
+                      link = guid
+
+                  if title:
+                      articles.append(
+                          {
+                              "source": source,
+                              "title": title,
+                              "link": link,
+                              "summary": description,
+                              "published": published,
+                          }
+                      )
+
+              # Atom
+              if not articles:
+                  namespaces = {
+                      "atom": "http://www.w3.org/2005/Atom"
+                  }
+
+                  for entry in root.findall(
+                      ".//atom:entry",
+                      namespaces
+                  ):
+                      title_node = entry.find(
+                          "atom:title",
+                          namespaces
+                      )
+
+                      title = clean_text(
+                          title_node.text
+                          if title_node is not None
+                          else ""
+                      )
+
+                      link = ""
+
+                      for link_node in entry.findall(
+                          "atom:link",
+                          namespaces
+                      ):
+                          href = link_node.attrib.get(
+                              "href",
+                              ""
+                          )
+
+                          rel = link_node.attrib.get(
+                              "rel",
+                              "alternate"
+                          )
+
+                          if href and rel == "alternate":
+                              link = href
+                              break
+
+                      summary_node = entry.find(
+                          "atom:summary",
+                          namespaces
+                      )
+
+                      summary = clean_text(
+                          summary_node.text
+                          if summary_node is not None
+                          else ""
+                      )
+
+                      published_node = entry.find(
+                          "atom:published",
+                          namespaces
+                      )
+
+                      updated_node = entry.find(
+                          "atom:updated",
+                          namespaces
+                      )
+
+                      date_text = ""
+
+                      if published_node is not None:
+                          date_text = published_node.text or ""
+
+                      if not date_text and updated_node is not None:
+                          date_text = updated_node.text or ""
+
+                      published = parse_date(
+                          date_text
+                      )
+
+                      if title:
+                          articles.append(
+                              {
+                                  "source": source,
+                                  "title": title,
+                                  "link": link,
+                                  "summary": summary,
+                                  "published": published,
+                              }
+                          )
+
+              return articles
+
+
+          def article_coin_matches(article):
+              text = (
+                  article["title"]
+                  + " "
+                  + article["summary"]
+              ).lower()
+
+              title = article["title"].lower()
+
+              matches = []
+
+              for coin, keywords in NEWS_KEYWORDS.items():
+
+                  # Stronger matching in title
+                  title_match = any(
+                      keyword.lower() in title
+                      for keyword in keywords
+                  )
+
+                  if title_match:
+                      matches.append(coin)
+                      continue
+
+                  # Summary match is accepted only
+                  # for strong news signals.
+                  summary_match = any(
+                      keyword.lower() in text
+                      for keyword in keywords
+                  )
+
+                  if summary_match:
+                      signal = detect_news_signal(
+                          text
+                      )
+
+                      if signal is not None:
+                          matches.append(coin)
+
+              return matches
+
+
+          def detect_news_signal(text):
+              for label, keywords in NEWS_SIGNALS:
+                  for keyword in keywords:
+                      if keyword in text:
+                          return label
+
+              return "📰 NEWS"
+
+
+          def news_fingerprint(article):
+              base = (
+                  article["title"]
+                  .strip()
+                  .lower()
+              )
+
+              return hashlib.sha256(
+                  base.encode("utf-8")
+              ).hexdigest()
+
+
+          def format_news(article, coins, signal):
+              coins_text = ", ".join(
+                  f"${coin}"
+                  for coin in coins
+              )
+
+              published = article.get(
+                  "published"
+              )
+
+              if published:
+                  time_text = published.strftime(
+                      "%H:%M UTC"
+                  )
+              else:
+                  time_text = "time unknown"
+
+              link = article.get(
+                  "link",
+                  ""
+              )
+
+              message = (
+                  f"{signal}\n\n"
+                  f"🪙 {coins_text}\n"
+                  f"📰 {article['title']}\n\n"
+                  f"Источник: {article['source']}\n"
+                  f"Время: {time_text}"
+              )
+
+              if link:
+                  message += (
+                      f"\n\n🔗 {link}"
+                  )
+
+              return message
+
+
+          def process_news(state):
+              now = datetime.now(
+                  timezone.utc
+              )
+
+              cutoff = (
+                  now
+                  - timedelta(
+                      hours=NEWS_LOOKBACK_HOURS
+                  )
+              )
+
+              candidates = []
+
+              for source, url in NEWS_FEEDS:
+                  articles = parse_feed(
+                      source,
+                      url
+                  )
+
+                  print(
+                      f"{source}: "
+                      f"{len(articles)} articles"
+                  )
+
+                  for article in articles:
+
+                      published = article.get(
+                          "published"
+                      )
+
+                      if published:
+                          if published < cutoff:
+                              continue
+
+                      coins = article_coin_matches(
+                          article
+                      )
+
+                      if not coins:
+                          continue
+
+                      fingerprint = news_fingerprint(
+                          article
+                      )
+
+                      if fingerprint in state["news"]:
+                          continue
+
+                      signal = detect_news_signal(
+                          (
+                              article["title"]
+                              + " "
+                              + article["summary"]
+                          ).lower()
+                      )
+
+                      candidates.append(
+                          (
+                              article,
+                              coins,
+                              signal,
+                              fingerprint
+                          )
+                      )
+
+              # Newest first
+              candidates.sort(
+                  key=lambda x: (
+                      x[0]["published"]
+                      or datetime.min.replace(
+                          tzinfo=timezone.utc
+                      )
+                  ),
+                  reverse=True
+              )
+
+              sent_count = 0
+
+              for article, coins, signal, fingerprint in candidates:
+
+                  if sent_count >= MAX_NEWS_ALERTS_PER_RUN:
+                      break
+
+                  message = format_news(
+                      article,
+                      coins,
+                      signal
+                  )
+
+                  print(
+                      "\nNEWS ALERT:\n"
+                      + message
+                  )
+
+                  try:
+                      success = send_telegram(
+                          message
+                      )
+
+                      if success:
+                          state["news"][fingerprint] = {
+                              "sent_at": now.isoformat(),
+                              "title": article["title"],
+                          }
+
+                          sent_count += 1
+
+                  except Exception as e:
+                      print(
+                          f"Telegram news error: {e}"
+                      )
+
+              # Remove very old news fingerprints
+              retention_cutoff = (
+                  now
+                  - timedelta(days=7)
+              )
+
+              for fingerprint in list(
+                  state["news"].keys()
+              ):
+                  try:
+                      sent_at = datetime.fromisoformat(
+                          state["news"][fingerprint]["sent_at"]
+                      )
+
+                      if sent_at < retention_cutoff:
+                          del state["news"][fingerprint]
+
+                  except Exception:
+                      pass
+
+              return sent_count
+
+
+          # ============================================================
+          # TEST TELEGRAM
           # ============================================================
 
           if TEST_TELEGRAM:
-
-              test_message = (
+              message = (
                   "🚀 UNCLE GOO CRYPTO MONITOR\n\n"
-                  "✅ Telegram работает.\n"
-                  "✅ Бот успешно получает сообщения.\n"
-                  "✅ Защита от повторных уведомлений включена.\n"
-                  "✅ Монитор работает каждые 5 минут."
+                  "Telegram works!\n\n"
+                  "✅ Price monitor\n"
+                  "✅ Volume monitor\n"
+                  "✅ Alert deduplication\n"
+                  "✅ News monitor\n"
+                  "✅ CoinDesk\n"
+                  "✅ Cointelegraph\n\n"
+                  "⏱ Monitor interval: 5 minutes"
               )
 
-              send_telegram(
-                  test_message
+              success = send_telegram(
+                  message
               )
 
               print(
-                  "Telegram test completed successfully."
+                  "Telegram test:",
+                  success
               )
 
               raise SystemExit(0)
 
 
           # ============================================================
-          # LOAD STATE
+          # MAIN
           # ============================================================
 
           state = load_state()
 
-          alerts_to_send = []
+          alerts_sent = 0
 
-          state_changed = False
-
-
-          # ============================================================
-          # MARKET MONITOR
-          # ============================================================
-
-          print("")
           print(
-              "=========================================="
+              "=============================="
           )
           print(
               "UNCLE GOO CRYPTO MONITOR"
           )
           print(
-              "=========================================="
+              "=============================="
           )
-          print("")
 
+          # ------------------------------------------------------------
+          # MARKET MONITOR
+          # ------------------------------------------------------------
 
-          for coin in COINS:
-
-              symbol = coin + "USDT"
+          for symbol in SYMBOLS:
 
               try:
-
-                  data = get_candles(
+                  market = calculate_market(
                       symbol
                   )
 
-                  if len(data) < 13:
-
-                      print(
-                          f"{symbol}: "
-                          "not enough candle data"
-                      )
-
-                      continue
-
-
-                  # Bitget returns newest first.
-                  data = list(
-                      reversed(data)
-                  )
-
-
-                  # 5-minute candles.
-                  #
-                  # 12 intervals = 60 minutes.
-                  # 6 intervals  = 30 minutes.
-
-                  old_60 = float(
-                      data[0][4]
-                  )
-
-                  old_30 = float(
-                      data[6][4]
-                  )
-
-                  current = float(
-                      data[-1][4]
-                  )
-
-
-                  if (
-                      old_60 <= 0
-                      or old_30 <= 0
-                  ):
-
-                      print(
-                          f"{symbol}: "
-                          "invalid price data"
-                      )
-
-                      continue
-
-
-                  change_60 = (
-                      (
-                          current
-                          / old_60
-                      ) - 1
-                  ) * 100
-
-
-                  change_30 = (
-                      (
-                          current
-                          / old_30
-                      ) - 1
-                  ) * 100
-
-
-                  # ==================================================
-                  # VOLUME
-                  # ==================================================
-
-                  volumes = [
-                      float(candle[5])
-                      for candle in data[:-1]
+                  change_30 = market[
+                      "change_30"
                   ]
 
-                  current_volume = float(
-                      data[-1][5]
-                  )
+                  change_60 = market[
+                      "change_60"
+                  ]
 
-                  if volumes:
-
-                      avg_volume = (
-                          sum(volumes)
-                          / len(volumes)
-                      )
-
-                  else:
-
-                      avg_volume = 0
-
-
-                  if avg_volume > 0:
-
-                      volume_ratio = (
-                          current_volume
-                          / avg_volume
-                      )
-
-                  else:
-
-                      volume_ratio = 0
-
-
-                  # ==================================================
-                  # ALERT DETECTION
-                  # ==================================================
-
-                  alert_text = None
-
-                  fingerprint = None
-
-
-                  # EXTREME
-                  if abs(change_60) >= 12:
-
-                      level = (
-                          "🚨 ЭКСТРЕМАЛЬНОЕ ДВИЖЕНИЕ"
-                      )
-
-                      direction = (
-                          "📈 РОСТ"
-                          if change_60 > 0
-                          else "📉 ПАДЕНИЕ"
-                      )
-
-                      fingerprint = (
-                          f"{coin}:extreme:"
-                          f"{'up' if change_60 > 0 else 'down'}"
-                      )
-
-                      alert_text = (
-                          f"{level}\n"
-                          f"{direction}: "
-                          f"{coin}/USDT\n"
-                          f"Цена: "
-                          f"${current:,.8f}\n"
-                          f"30 мин: "
-                          f"{change_30:+.2f}%\n"
-                          f"60 мин: "
-                          f"{change_60:+.2f}%\n"
-                          f"Объём: "
-                          f"{volume_ratio:.1f}x среднего"
-                      )
-
-
-                  # STRONG
-                  elif abs(change_30) >= 8:
-
-                      level = (
-                          "🔴 СИЛЬНОЕ ДВИЖЕНИЕ"
-                      )
-
-                      direction = (
-                          "📈 РОСТ"
-                          if change_30 > 0
-                          else "📉 ПАДЕНИЕ"
-                      )
-
-                      fingerprint = (
-                          f"{coin}:strong:"
-                          f"{'up' if change_30 > 0 else 'down'}"
-                      )
-
-                      alert_text = (
-                          f"{level}\n"
-                          f"{direction}: "
-                          f"{coin}/USDT\n"
-                          f"Цена: "
-                          f"${current:,.8f}\n"
-                          f"30 мин: "
-                          f"{change_30:+.2f}%\n"
-                          f"60 мин: "
-                          f"{change_60:+.2f}%\n"
-                          f"Объём: "
-                          f"{volume_ratio:.1f}x среднего"
-                      )
-
-
-                  # SHARP
-                  elif abs(change_60) >= 5:
-
-                      level = (
-                          "🟠 РЕЗКОЕ ДВИЖЕНИЕ"
-                      )
-
-                      direction = (
-                          "📈 РОСТ"
-                          if change_60 > 0
-                          else "📉 ПАДЕНИЕ"
-                      )
-
-                      fingerprint = (
-                          f"{coin}:sharp:"
-                          f"{'up' if change_60 > 0 else 'down'}"
-                      )
-
-                      alert_text = (
-                          f"{level}\n"
-                          f"{direction}: "
-                          f"{coin}/USDT\n"
-                          f"Цена: "
-                          f"${current:,.8f}\n"
-                          f"30 мин: "
-                          f"{change_30:+.2f}%\n"
-                          f"60 мин: "
-                          f"{change_60:+.2f}%\n"
-                          f"Объём: "
-                          f"{volume_ratio:.1f}x среднего"
-                      )
-
-
-                  # ABNORMAL VOLUME
-                  elif (
-                      volume_ratio >= 3
-                      and abs(change_60) >= 3
-                  ):
-
-                      direction = (
-                          "📈"
-                          if change_60 > 0
-                          else "📉"
-                      )
-
-                      fingerprint = (
-                          f"{coin}:volume:"
-                          f"{'up' if change_60 > 0 else 'down'}"
-                      )
-
-                      alert_text = (
-                          "⚠️ АНОМАЛЬНЫЙ ОБЪЁМ\n"
-                          f"{direction} "
-                          f"{coin}/USDT\n"
-                          f"Цена: "
-                          f"${current:,.8f}\n"
-                          f"60 мин: "
-                          f"{change_60:+.2f}%\n"
-                          f"Объём: "
-                          f"{volume_ratio:.1f}x среднего"
-                      )
-
-
-                  # ==================================================
-                  # DEDUPLICATION
-                  # ==================================================
-
-                  if (
-                      alert_text
-                      and fingerprint
-                  ):
-
-                      if should_send_alert(
-                          state,
-                          fingerprint
-                      ):
-
-                          alerts_to_send.append(
-                              alert_text
-                          )
-
-                          mark_alert_sent(
-                              state,
-                              fingerprint
-                          )
-
-                          state_changed = True
-
-
-                  # ==================================================
-                  # LOG
-                  # ==================================================
+                  volume_ratio = market[
+                      "volume_ratio"
+                  ]
 
                   print(
                       f"{symbol}: "
@@ -824,70 +1183,169 @@ jobs:
                       f"volume={volume_ratio:.1f}x"
                   )
 
+                  alerts = []
 
-              except Exception as error:
+                  if abs(change_60) >= EXTREME_60:
+                      alerts.append(
+                          (
+                              "EXTREME",
+                              change_60,
+                              "60m"
+                          )
+                      )
 
+                  elif abs(change_30) >= STRONG_30:
+                      alerts.append(
+                          (
+                              "STRONG",
+                              change_30,
+                              "30m"
+                          )
+                      )
+
+                  elif abs(change_60) >= SHARP_60:
+                      alerts.append(
+                          (
+                              "SHARP",
+                              change_60,
+                              "60m"
+                          )
+                      )
+
+                  if (
+                      volume_ratio >=
+                      ABNORMAL_VOLUME_RATIO
+                      and
+                      abs(change_60) >=
+                      ABNORMAL_VOLUME_MOVE
+                  ):
+                      alerts.append(
+                          (
+                              "VOLUME",
+                              change_60,
+                              "60m"
+                          )
+                      )
+
+                  for level, change, period in alerts:
+
+                      direction = (
+                          "UP"
+                          if change > 0
+                          else "DOWN"
+                      )
+
+                      fingerprint = (
+                          f"{symbol}:"
+                          f"{level}:"
+                          f"{direction}"
+                      )
+
+                      if not should_send_alert(
+                          state,
+                          fingerprint
+                      ):
+                          continue
+
+                      if level == "EXTREME":
+                          emoji = "🚨"
+                          title = "EXTREME MOVE"
+
+                      elif level == "STRONG":
+                          emoji = "🔴"
+                          title = "STRONG MOVE"
+
+                      elif level == "SHARP":
+                          emoji = "🟠"
+                          title = "SHARP MOVE"
+
+                      else:
+                          emoji = "🟣"
+                          title = "ABNORMAL VOLUME"
+
+                      message = (
+                          f"{emoji} {title}\n\n"
+                          f"🪙 {symbol}\n"
+                          f"💰 Price: "
+                          f"{market['price']:.10g}\n"
+                          f"📈 {period}: "
+                          f"{change:+.2f}%\n"
+                          f"📊 Volume: "
+                          f"{volume_ratio:.1f}x\n\n"
+                          f"Bitget Spot"
+                      )
+
+                      print(
+                          "\nPRICE ALERT:\n"
+                          + message
+                      )
+
+                      try:
+                          success = send_telegram(
+                              message
+                          )
+
+                          if success:
+                              mark_alert_sent(
+                                  state,
+                                  fingerprint
+                              )
+
+                              alerts_sent += 1
+
+                      except Exception as e:
+                          print(
+                              f"Telegram price error: {e}"
+                          )
+
+              except Exception as e:
                   print(
-                      f"{symbol}: ERROR: "
-                      f"{error}"
+                      f"ERROR {symbol}: {e}"
                   )
 
 
-          # ============================================================
-          # SEND ALERTS
-          # ============================================================
+          # ------------------------------------------------------------
+          # NEWS MONITOR
+          # ------------------------------------------------------------
 
-          if alerts_to_send:
+          news_sent = process_news(
+              state
+          )
 
-              now = datetime.now(
-                  timezone.utc
-              ).strftime(
-                  "%Y-%m-%d %H:%M UTC"
-              )
 
-              message = (
-                  "🚀 UNCLE GOO CRYPTO MONITOR\n\n"
-                  + "\n\n".join(
-                      alerts_to_send
+          # ------------------------------------------------------------
+          # SAVE STATE
+          # ------------------------------------------------------------
+
+          if alerts_sent > 0 or news_sent > 0:
+              save_state(state)
+
+              try:
+                  save_state_to_github()
+              except Exception as e:
+                  print(
+                      f"State git save error: {e}"
                   )
-                  + f"\n\n⏱ {now}"
-              )
 
-              send_telegram(
-                  message
-              )
+          print(
+              "\n=============================="
+          )
 
-              print("")
+          print(
+              f"Price alerts sent: {alerts_sent}"
+          )
+
+          print(
+              f"News alerts sent: {news_sent}"
+          )
+
+          if alerts_sent == 0 and news_sent == 0:
               print(
-                  "ALERT SENT TO TELEGRAM"
-              )
-              print("")
-
-          else:
-
-              print("")
-              print(
-                  "No new alerts."
-              )
-              print("")
-
-
-          # ============================================================
-          # SAVE DEDUPLICATION STATE
-          # ============================================================
-
-          if state_changed:
-
-              save_state(
-                  state
+                  "No alerts."
               )
 
-              save_state_to_github()
-
-          else:
-
-              print(
-                  "No state changes."
-              )
+          print(
+              "=============================="
+          )
 
           PY
