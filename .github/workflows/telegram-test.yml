@@ -126,7 +126,6 @@ jobs:
               'ETCUSDT',
               'FILUSDT',
               'ETHFIUSDT',
-              'ONDOUSDT',
               'TWTUSDT',
               'XLMUSDT',
               'ARKMUSDT',
@@ -180,10 +179,6 @@ jobs:
                   'ether.fi',
                   'etherfi',
                   'ethfi',
-              ],
-              'ONDO': [
-                  'ondo finance',
-                  'ondo',
               ],
               'TWT': [
                   'trust wallet',
@@ -521,8 +516,8 @@ jobs:
           def load_state():
               if not os.path.exists(STATE_FILE):
                   return {
-                      'alerts': {},
-                      'news': {},
+                      'sent_alerts': {},
+                      'sent_news': {},
                   }
 
               try:
@@ -531,50 +526,190 @@ jobs:
                       'r',
                       encoding='utf-8'
                   ) as f:
-                      raw = json.load(f)
+                      state = json.load(f)
 
-                  if (
-                      'alerts' not in raw
-                      and
-                      'news' not in raw
-                  ):
-                      return {
-                          'alerts': raw,
-                          'news': {},
-                      }
+                  if not isinstance(state, dict):
+                      state = {}
 
-                  raw.setdefault(
-                      'alerts',
+                  state.setdefault(
+                      'sent_alerts',
                       {}
                   )
 
-                  raw.setdefault(
-                      'news',
+                  state.setdefault(
+                      'sent_news',
                       {}
                   )
 
-                  return raw
+                  return state
 
-              except Exception:
+              except Exception as e:
+                  print(
+                      f'State load error: {e}'
+                  )
+
                   return {
-                      'alerts': {},
-                      'news': {},
+                      'sent_alerts': {},
+                      'sent_news': {},
                   }
 
 
           def save_state(state):
-              with open(
-                  STATE_FILE,
-                  'w',
-                  encoding='utf-8'
-              ) as f:
-                  json.dump(
-                      state,
-                      f,
-                      ensure_ascii=False,
-                      indent=2,
+              try:
+                  with open(
+                      STATE_FILE,
+                      'w',
+                      encoding='utf-8'
+                  ) as f:
+                      json.dump(
+                          state,
+                          f,
+                          ensure_ascii=False,
+                          indent=2
+                      )
+
+              except Exception as e:
+                  print(
+                      f'State save error: {e}'
                   )
 
+
+          def cleanup_state(state):
+              now = datetime.now(
+                  timezone.utc
+              )
+
+              cutoff = now - timedelta(
+                  hours=24
+              )
+
+              sent_alerts = state.get(
+                  'sent_alerts',
+                  {}
+              )
+
+              cleaned_alerts = {}
+
+              for key, value in sent_alerts.items():
+                  try:
+                      dt = datetime.fromisoformat(
+                          value
+                      )
+
+                      if dt >= cutoff:
+                          cleaned_alerts[key] = value
+
+                  except Exception:
+                      pass
+
+              state['sent_alerts'] = cleaned_alerts
+
+              sent_news = state.get(
+                  'sent_news',
+                  {}
+              )
+
+              cleaned_news = {}
+
+              for key, value in sent_news.items():
+                  try:
+                      dt = datetime.fromisoformat(
+                          value
+                      )
+
+                      if dt >= cutoff:
+                          cleaned_news[key] = value
+
+                  except Exception:
+                      pass
+
+              state['sent_news'] = cleaned_news
+
+
+          def alert_already_sent(
+              state,
+              fingerprint
+          ):
+              cleanup_state(state)
+
+              value = state.get(
+                  'sent_alerts',
+                  {}
+              ).get(
+                  fingerprint
+              )
+
+              if not value:
+                  return False
+
+              try:
+                  sent_at = datetime.fromisoformat(
+                      value
+                  )
+
+                  age = (
+                      datetime.now(
+                          timezone.utc
+                      ) - sent_at
+                  )
+
+                  return (
+                      age.total_seconds()
+                      <
+                      ALERT_COOLDOWN_MINUTES * 60
+                  )
+
+              except Exception:
+                  return False
+
+
+          def mark_alert_sent(
+              state,
+              fingerprint
+          ):
+              state.setdefault(
+                  'sent_alerts',
+                  {}
+              )[fingerprint] = (
+                  datetime.now(
+                      timezone.utc
+                  ).isoformat()
+              )
+
+
+          def news_already_sent(
+              state,
+              fingerprint
+          ):
+              cleanup_state(state)
+
+              return (
+                  fingerprint
+                  in
+                  state.get(
+                      'sent_news',
+                      {}
+                  )
+              )
+
+
+          def mark_news_sent(
+              state,
+              fingerprint
+          ):
+              state.setdefault(
+                  'sent_news',
+                  {}
+              )[fingerprint] = (
+                  datetime.now(
+                      timezone.utc
+                  ).isoformat()
+              )
+
+
+          # ============================================================
+          # GITHUB STATE SAVE
+          # ============================================================
 
           def save_state_to_github():
               subprocess.run(
@@ -582,9 +717,9 @@ jobs:
                       'git',
                       'config',
                       'user.name',
-                      'github-actions[bot]',
+                      'github-actions[bot]'
                   ],
-                  check=True,
+                  check=False
               )
 
               subprocess.run(
@@ -592,18 +727,18 @@ jobs:
                       'git',
                       'config',
                       'user.email',
-                      '41898282+github-actions[bot]@users.noreply.github.com',
+                      '41898282+github-actions[bot]@users.noreply.github.com'
                   ],
-                  check=True,
+                  check=False
               )
 
               subprocess.run(
                   [
                       'git',
                       'add',
-                      STATE_FILE,
+                      STATE_FILE
                   ],
-                  check=True,
+                  check=False
               )
 
               result = subprocess.run(
@@ -611,11 +746,15 @@ jobs:
                       'git',
                       'diff',
                       '--cached',
-                      '--quiet',
-                  ]
+                      '--quiet'
+                  ],
+                  check=False
               )
 
               if result.returncode == 0:
+                  print(
+                      'No state changes to commit.'
+                  )
                   return
 
               subprocess.run(
@@ -623,90 +762,82 @@ jobs:
                       'git',
                       'commit',
                       '-m',
-                      'Update crypto monitor state',
+                      'Update crypto monitor state'
                   ],
-                  check=True,
+                  check=False
               )
 
               subprocess.run(
                   [
                       'git',
-                      'push',
+                      'push'
                   ],
-                  check=True,
+                  check=False
               )
-
-
-          # ============================================================
-          # DEDUPLICATION
-          # ============================================================
-
-          def should_send_alert(
-              state,
-              fingerprint
-          ):
-              item = state[
-                  'alerts'
-              ].get(
-                  fingerprint
-              )
-
-              if not item:
-                  return True
-
-              try:
-                  sent_at = datetime.fromisoformat(
-                      item['sent_at']
-                  )
-
-                  now = datetime.now(
-                      timezone.utc
-                  )
-
-                  age = (
-                      now - sent_at
-                  ).total_seconds() / 60
-
-                  return (
-                      age
-                      >= ALERT_COOLDOWN_MINUTES
-                  )
-
-              except Exception:
-                  return True
-
-
-          def mark_alert_sent(
-              state,
-              fingerprint
-          ):
-              state[
-                  'alerts'
-              ][fingerprint] = {
-                  'sent_at':
-                      datetime.now(
-                          timezone.utc
-                      ).isoformat()
-              }
 
 
           # ============================================================
           # BITGET
           # ============================================================
 
+          def get_candles(symbol):
+              data = http_get_json(
+                  BITGET_CANDLES_URL,
+                  params={
+                      'category': 'SPOT',
+                      'symbol': symbol,
+                      'interval': '1m',
+                      'limit': 80,
+                  },
+                  timeout=20
+              )
+
+              rows = data.get(
+                  'data',
+                  []
+              )
+
+              candles = []
+
+              for row in rows:
+                  try:
+                      timestamp = int(
+                          row[0]
+                      )
+
+                      close = float(
+                          row[4]
+                      )
+
+                      candles.append(
+                          (
+                              datetime.fromtimestamp(
+                                  timestamp / 1000,
+                                  tz=timezone.utc
+                              ),
+                              close
+                          )
+                      )
+
+                  except Exception:
+                      continue
+
+              candles.sort(
+                  key=lambda x: x[0]
+              )
+
+              return candles
+
+
           def get_ticker(symbol):
               data = http_get_json(
                   BITGET_TICKER_URL,
-                  {
+                  params={
                       'category': 'SPOT',
                       'symbol': symbol,
                   },
+                  timeout=20
               )
-
-              if data.get('code') != '00000':
-                  raise RuntimeError(
-                      f'Bitget ticker error: {data}'
-                  )
 
               rows = data.get(
                   'data',
@@ -718,770 +849,137 @@ jobs:
                       f'No ticker data for {symbol}'
                   )
 
-              last_price = rows[
-                  0
-              ].get(
+              row = rows[0]
+
+              value = row.get(
                   'lastPrice'
               )
 
-              if last_price is None:
+              if value is None:
                   raise RuntimeError(
                       f'No lastPrice for {symbol}'
                   )
 
-              return float(last_price)
-
-
-          def get_candles(symbol):
-              data = http_get_json(
-                  BITGET_CANDLES_URL,
-                  {
-                      'category': 'SPOT',
-                      'symbol': symbol,
-                      'interval': '5m',
-                      'limit': 30,
-                  },
+              return float(
+                  value
               )
 
-              if data.get('code') != '00000':
-                  raise RuntimeError(
-                      f'Bitget candle error: {data}'
+
+          def get_historical_close(
+              candles,
+              target_time
+          ):
+              completed = [
+                  (
+                      timestamp,
+                      close
                   )
-
-              candles = data.get(
-                  'data',
-                  []
-              )
-
-              if len(candles) < 13:
-                  raise RuntimeError(
-                      f'Not enough candles for '
-                      f'{symbol}: {len(candles)}'
-                  )
-
-              # IMPORTANT:
-              # Sort by timestamp.
-              # Do NOT blindly reverse.
-              candles = sorted(
-                  candles,
-                  key=lambda c: int(c[0])
-              )
-
-              closes = [
-                  float(c[4])
-                  for c in candles
+                  for timestamp, close
+                  in candles
+                  if timestamp <= target_time
               ]
 
-              return closes
+              if not completed:
+                  raise RuntimeError(
+                      f'No completed 1m candle for '
+                      f'{target_time.isoformat()}'
+                  )
+
+              return completed[-1]
 
 
           def calculate_market(symbol):
-              price_now = get_ticker(
+              price = get_ticker(
                   symbol
               )
 
-              closes = get_candles(
+              candles = get_candles(
                   symbol
               )
 
-              price_5 = closes[-2]
-              price_15 = closes[-4]
-              price_30 = closes[-7]
-              price_45 = closes[-10]
-              price_60 = closes[-13]
-
-              change_5 = (
-                  price_now / price_5 - 1
-              ) * 100
-
-              change_15 = (
-                  price_now / price_15 - 1
-              ) * 100
-
-              change_30 = (
-                  price_now / price_30 - 1
-              ) * 100
-
-              change_45 = (
-                  price_now / price_45 - 1
-              ) * 100
-
-              change_60 = (
-                  price_now / price_60 - 1
-              ) * 100
-
-              return {
-                  'price': price_now,
-                  'change_5': change_5,
-                  'change_15': change_15,
-                  'change_30': change_30,
-                  'change_45': change_45,
-                  'change_60': change_60,
-              }
-
-
-          # ============================================================
-          # TEXT / DATE
-          # ============================================================
-
-          def clean_text(text):
-              if not text:
-                  return ''
-
-              text = re.sub(
-                  r'<[^>]+>',
-                  ' ',
-                  text
-              )
-
-              text = re.sub(
-                  r'\s+',
-                  ' ',
-                  text
-              )
-
-              return text.strip()
-
-
-          def parse_date(value):
-              if not value:
-                  return None
-
-              value = value.strip()
-
-              try:
-                  dt = parsedate_to_datetime(
-                      value
-                  )
-
-                  if dt.tzinfo is None:
-                      dt = dt.replace(
-                          tzinfo=timezone.utc
-                      )
-
-                  return dt.astimezone(
-                      timezone.utc
-                  )
-
-              except Exception:
-                  pass
-
-              try:
-                  value = value.replace(
-                      'Z',
-                      '+00:00'
-                  )
-
-                  dt = datetime.fromisoformat(
-                      value
-                  )
-
-                  if dt.tzinfo is None:
-                      dt = dt.replace(
-                          tzinfo=timezone.utc
-                      )
-
-                  return dt.astimezone(
-                      timezone.utc
-                  )
-
-              except Exception:
-                  return None
-
-
-          # ============================================================
-          # RSS PARSER
-          # ============================================================
-
-          def parse_feed(
-              source_name,
-              url
-          ):
-              raw = http_get_text(
-                  url,
-                  timeout=NEWS_TIMEOUT
-              )
-
-              root = ET.fromstring(
-                  raw
-              )
-
-              articles = []
-
-              for item in root.findall(
-                  './/item'
-              ):
-                  title = clean_text(
-                      item.findtext('title')
-                  )
-
-                  link = clean_text(
-                      item.findtext('link')
-                  )
-
-                  description = clean_text(
-                      item.findtext(
-                          'description'
-                      )
-                  )
-
-                  pub_date = (
-                      item.findtext(
-                          'pubDate'
-                      )
-                      or
-                      item.findtext(
-                          'published'
-                      )
-                      or
-                      item.findtext(
-                          'updated'
-                      )
-                  )
-
-                  dt = parse_date(
-                      pub_date
-                  )
-
-                  if title:
-                      articles.append(
-                          {
-                              'source':
-                                  source_name,
-                              'title':
-                                  title,
-                              'link':
-                                  link,
-                              'description':
-                                  description,
-                              'date':
-                                  dt,
-                          }
-                      )
-
-              if not articles:
-                  ns = {
-                      'atom':
-                          'http://www.w3.org/2005/Atom'
-                  }
-
-                  for entry in root.findall(
-                      './/atom:entry',
-                      ns
-                  ):
-                      title_node = entry.find(
-                          'atom:title',
-                          ns
-                      )
-
-                      title = clean_text(
-                          title_node.text
-                          if title_node is not None
-                          else ''
-                      )
-
-                      link = ''
-
-                      link_node = entry.find(
-                          'atom:link',
-                          ns
-                      )
-
-                      if link_node is not None:
-                          link = link_node.attrib.get(
-                              'href',
-                              ''
-                          )
-
-                      summary_node = entry.find(
-                          'atom:summary',
-                          ns
-                      )
-
-                      description = clean_text(
-                          summary_node.text
-                          if summary_node is not None
-                          else ''
-                      )
-
-                      published_node = entry.find(
-                          'atom:published',
-                          ns
-                      )
-
-                      updated_node = entry.find(
-                          'atom:updated',
-                          ns
-                      )
-
-                      date_value = ''
-
-                      if published_node is not None:
-                          date_value = (
-                              published_node.text
-                              or ''
-                          )
-
-                      elif updated_node is not None:
-                          date_value = (
-                              updated_node.text
-                              or ''
-                          )
-
-                      dt = parse_date(
-                          date_value
-                      )
-
-                      if title:
-                          articles.append(
-                              {
-                                  'source':
-                                      source_name,
-                                  'title':
-                                      title,
-                                  'link':
-                                      link,
-                                  'description':
-                                      description,
-                                  'date':
-                                      dt,
-                              }
-                          )
-
-              return articles
-
-
-          # ============================================================
-          # CRYPTO.RU PARSER
-          # ============================================================
-
-          def parse_crypto_ru():
-              raw = http_get_text(
-                  CRYPTO_RU_NEWS_URL,
-                  timeout=NEWS_TIMEOUT
-              )
-
-              html = raw.decode(
-                  'utf-8',
-                  errors='ignore'
-              )
-
-              articles = []
-
-              pattern = re.compile(
-                  r'href=["\']'
-                  r'(https://crypto\.ru/[^"\']+|/news/[^"\']+)'
-                  r'["\'][^>]*>'
-                  r'\s*(?:<[^>]+>\s*)*'
-                  r'([^<]{10,300})'
-                  r'\s*(?:<[^>]+>\s*)*'
-                  r'</a>',
-                  re.IGNORECASE
-              )
-
-              seen = set()
-
-              for match in pattern.finditer(
-                  html
-              ):
-                  link = match.group(
-                      1
-                  )
-
-                  title = clean_text(
-                      match.group(2)
-                  )
-
-                  if link.startswith('/'):
-                      link = (
-                          'https://crypto.ru'
-                          + link
-                      )
-
-                  if '/news/' not in link:
-                      continue
-
-                  if not title:
-                      continue
-
-                  key = (
-                      link,
-                      title
-                  )
-
-                  if key in seen:
-                      continue
-
-                  seen.add(key)
-
-                  start = max(
-                      0,
-                      match.start() - 1500
-                  )
-
-                  context = html[
-                      start:
-                      match.end() + 500
-                  ]
-
-                  date_match = re.search(
-                      r'(\d{1,2}\.\d{1,2}\.\d{4})'
-                      r'(?:[^0-9]{0,100}'
-                      r'(\d{1,2}:\d{2}))?',
-                      context
-                  )
-
-                  dt = None
-
-                  if date_match:
-                      date_part = (
-                          date_match.group(1)
-                      )
-
-                      time_part = (
-                          date_match.group(2)
-                          or
-                          '00:00'
-                      )
-
-                      try:
-                          naive = datetime.strptime(
-                              date_part
-                              + ' '
-                              + time_part,
-                              '%d.%m.%Y %H:%M'
-                          )
-
-                          dt = naive.replace(
-                              tzinfo=timezone.utc
-                          )
-
-                      except Exception:
-                          dt = None
-
-                  articles.append(
-                      {
-                          'source':
-                              'Crypto.ru',
-                          'title':
-                              title,
-                          'link':
-                              link,
-                          'description':
-                              '',
-                          'date':
-                              dt,
-                      }
-                  )
-
-                  if len(articles) >= 50:
-                      break
-
-              return articles
-
-
-          # ============================================================
-          # NEWS MATCHING
-          # ============================================================
-
-          def article_coin_matches(
-              article,
-              symbol
-          ):
-              coin = symbol.replace(
-                  'USDT',
-                  ''
-              )
-
-              keywords = NEWS_KEYWORDS.get(
-                  coin,
-                  []
-              )
-
-              text = (
-                  article.get(
-                      'title',
-                      ''
-                  )
-                  + ' '
-                  +
-                  article.get(
-                      'description',
-                      ''
-                  )
-              ).lower()
-
-              for keyword in keywords:
-                  keyword = keyword.lower()
-
-                  if keyword in text:
-                      return True
-
-              return False
-
-
-          def detect_news_signal(
-              article
-          ):
-              text = (
-                  article.get(
-                      'title',
-                      ''
-                  )
-                  + ' '
-                  +
-                  article.get(
-                      'description',
-                      ''
-                  )
-              ).lower()
-
-              for (
-                  signal_name,
-                  keywords
-              ) in NEWS_SIGNALS:
-
-                  for keyword in keywords:
-                      if (
-                          keyword.lower()
-                          in text
-                      ):
-                          return signal_name
-
-              return None
-
-
-          def news_fingerprint(
-              article,
-              symbol
-          ):
-              raw = (
-                  symbol
-                  + '|'
-                  +
-                  article.get(
-                      'source',
-                      ''
-                  )
-                  + '|'
-                  +
-                  article.get(
-                      'title',
-                      ''
-                  )
-              )
-
-              return hashlib.sha256(
-                  raw.encode(
-                      'utf-8'
-                  )
-              ).hexdigest()
-
-
-          # ============================================================
-          # COLLECT NEWS
-          # ============================================================
-
-          def collect_news():
               now = datetime.now(
                   timezone.utc
               )
 
-              cutoff = (
-                  now
-                  -
-                  timedelta(
-                      hours=
-                          NEWS_LOOKBACK_HOURS
-                  )
-              )
-
-              all_articles = []
-
-              for (
-                  source_name,
-                  feed_url
-              ) in NEWS_FEEDS:
-
-                  try:
-                      articles = parse_feed(
-                          source_name,
-                          feed_url
-                      )
-
-                      print(
-                          f'{source_name}: '
-                          f'{len(articles)} articles'
-                      )
-
-                      all_articles.extend(
-                          articles
-                      )
-
-                  except Exception as e:
-                      print(
-                          f'NEWS ERROR '
-                          f'{source_name}: '
-                          f'{e}'
-                      )
-
-              try:
-                  articles = parse_crypto_ru()
-
-                  print(
-                      f'Crypto.ru: '
-                      f'{len(articles)} articles'
-                  )
-
-                  all_articles.extend(
-                      articles
-                  )
-
-              except Exception as e:
-                  print(
-                      f'NEWS ERROR Crypto.ru: '
-                      f'{e}'
-                  )
-
-              all_articles.sort(
-                  key=lambda a:
-                      a.get('date')
-                      or
-                      datetime.min.replace(
-                          tzinfo=timezone.utc
-                      ),
-                  reverse=True
-              )
-
-              fresh = []
-
-              for article in all_articles:
-                  article_date = article.get(
-                      'date'
-                  )
-
-                  if article_date is None:
-                      continue
-
-                  if article_date < cutoff:
-                      continue
-
-                  signal = detect_news_signal(
-                      article
-                  )
-
-                  if not signal:
-                      continue
-
-                  article['signal'] = signal
-
-                  fresh.append(
-                      article
-                  )
-
-              context = {}
-
-              for symbol in SYMBOLS:
-                  matches = []
-
-                  for article in fresh:
-                      if article_coin_matches(
-                          article,
-                          symbol
-                      ):
-                          matches.append(
-                              article
-                          )
-
-                  context[symbol] = matches
-
-              print(
-                  f'Fresh significant news: '
-                  f'{len(fresh)}'
-              )
-
-              return context
-
-
-          def news_already_sent(
-              state,
-              fingerprint
-          ):
-              return fingerprint in state[
-                  'news'
+              periods = [
+                  5,
+                  15,
+                  30,
+                  45,
+                  60,
               ]
 
-
-          def mark_news_sent(
-              state,
-              fingerprint
-          ):
-              state[
-                  'news'
-              ][fingerprint] = {
-                  'sent_at':
-                      datetime.now(
-                          timezone.utc
-                      ).isoformat()
+              result = {
+                  'symbol': symbol,
+                  'price': price,
+                  'market_time': now,
+                  'historical_times': {},
               }
 
+              for minutes in periods:
+                  target_time = (
+                      now -
+                      timedelta(
+                          minutes=minutes
+                      )
+                  )
 
-          def format_news_line(
-              article
-          ):
-              source = article.get(
-                  'source',
-                  'News'
-              )
+                  historical_time, historical_close = (
+                      get_historical_close(
+                          candles,
+                          target_time
+                      )
+                  )
 
-              title = article.get(
-                  'title',
-                  ''
-              )
+                  change = (
+                      (
+                          price -
+                          historical_close
+                      )
+                      /
+                      historical_close
+                      *
+                      100
+                  )
 
-              link = article.get(
-                  'link',
-                  ''
-              )
+                  result[
+                      f'change_{minutes}'
+                  ] = change
 
-              signal = article.get(
-                  'signal',
-                  '📰 NEWS'
-              )
+                  result[
+                      'historical_times'
+                  ][minutes] = (
+                      historical_time
+                  )
 
-              return (
-                  f'{signal}\n\n'
-                  f'📰 {title}\n\n'
-                  f'Источник: {source}\n'
-                  f'{link}'
-              )
+              return result
 
 
           # ============================================================
           # PRICE SIGNALS
           # ============================================================
 
-          def classify_change(
+          def get_level(
               change,
               sharp,
               strong,
               very_strong,
               extreme
           ):
-              value = abs(
+              absolute = abs(
                   change
               )
 
-              if value >= extreme:
+              if absolute >= extreme:
                   return 'EXTREME'
 
-              if value >= very_strong:
+              if absolute >= very_strong:
                   return 'VERY STRONG'
 
-              if value >= strong:
+              if absolute >= strong:
                   return 'STRONG'
 
-              if value >= sharp:
+              if absolute >= sharp:
                   return 'SHARP'
 
               return None
@@ -1490,7 +988,9 @@ jobs:
           def get_price_alerts(
               market
           ):
-              periods = [
+              alerts = []
+
+              levels = [
                   (
                       '5m',
                       market['change_5'],
@@ -1533,8 +1033,6 @@ jobs:
                   ),
               ]
 
-              alerts = []
-
               for (
                   period,
                   change,
@@ -1542,9 +1040,9 @@ jobs:
                   strong,
                   very_strong,
                   extreme
-              ) in periods:
+              ) in levels:
 
-                  level = classify_change(
+                  level = get_level(
                       change,
                       sharp,
                       strong,
@@ -1564,11 +1062,17 @@ jobs:
               return alerts
 
 
+          # ============================================================
+          # SIGNAL STRENGTH
+          # ============================================================
+
           def calculate_signal_strength(
-              primary_level,
               price_alerts,
-              fresh_news
+              news_article=None
           ):
+              if not price_alerts:
+                  return 'LOW'
+
               severity = {
                   'SHARP': 1,
                   'STRONG': 2,
@@ -1576,51 +1080,552 @@ jobs:
                   'EXTREME': 4,
               }
 
-              score = severity.get(
-                  primary_level,
+              strongest = max(
+                  price_alerts,
+                  key=lambda x: (
+                      severity.get(
+                          x[0],
+                          0
+                      ),
+                      abs(x[1])
+                  )
+              )
+
+              base_score = severity.get(
+                  strongest[0],
                   0
               )
 
-              if len(price_alerts) >= 2:
-                  score += 1
+              directions = []
 
-              if fresh_news:
-                  score += 1
+              for (
+                  level,
+                  change,
+                  period
+              ) in price_alerts:
 
-              if score >= 7:
+                  if change > 0:
+                      directions.append(
+                          'UP'
+                      )
+
+                  elif change < 0:
+                      directions.append(
+                          'DOWN'
+                      )
+
+              if len(
+                  price_alerts
+              ) >= 2:
+                  base_score += 1
+
+              if news_article:
+                  base_score += 1
+
+              if base_score >= 7:
                   return 'EXTREME'
 
-              if score >= 5:
+              if base_score >= 5:
                   return 'VERY HIGH'
 
-              if score >= 4:
+              if base_score >= 4:
                   return 'HIGH'
 
-              if score >= 3:
+              if base_score >= 3:
                   return 'MEDIUM'
 
               return 'LOW'
 
 
-          def format_price_snapshot(
-              market
-          ):
-              return (
-                  f"5m: "
-                  f"{market['change_5']:+.2f}%\n"
-                  f"15m: "
-                  f"{market['change_15']:+.2f}%\n"
-                  f"30m: "
-                  f"{market['change_30']:+.2f}%\n"
-                  f"45m: "
-                  f"{market['change_45']:+.2f}%\n"
-                  f"60m: "
-                  f"{market['change_60']:+.2f}%"
+          # ============================================================
+          # NEWS HELPERS
+          # ============================================================
+
+          def clean_text(text):
+              if not text:
+                  return ''
+
+              text = re.sub(
+                  r'<[^>]+>',
+                  ' ',
+                  text
               )
+
+              text = re.sub(
+                  r'\s+',
+                  ' ',
+                  text
+              )
+
+              return text.strip()
+
+
+          def parse_news_date(value):
+              if not value:
+                  return None
+
+              value = value.strip()
+
+              try:
+                  dt = parsedate_to_datetime(
+                      value
+                  )
+
+                  if dt.tzinfo is None:
+                      dt = dt.replace(
+                          tzinfo=timezone.utc
+                      )
+
+                  return dt.astimezone(
+                      timezone.utc
+                  )
+
+              except Exception:
+                  pass
+
+              formats = [
+                  '%Y-%m-%dT%H:%M:%S%z',
+                  '%Y-%m-%dT%H:%M:%SZ',
+                  '%Y-%m-%d %H:%M:%S',
+                  '%Y-%m-%d',
+              ]
+
+              for fmt in formats:
+                  try:
+                      dt = datetime.strptime(
+                          value,
+                          fmt
+                      )
+
+                      if dt.tzinfo is None:
+                          dt = dt.replace(
+                              tzinfo=timezone.utc
+                          )
+
+                      return dt.astimezone(
+                          timezone.utc
+                      )
+
+                  except Exception:
+                      continue
+
+              return None
+
+
+          def news_fingerprint(
+              article,
+              symbol
+          ):
+              raw = (
+                  f"{symbol}|"
+                  f"{article.get('title', '')}|"
+                  f"{article.get('link', '')}"
+              )
+
+              return hashlib.sha256(
+                  raw.encode(
+                      'utf-8'
+                  )
+              ).hexdigest()
+
+
+          def detect_news_signal(
+              text
+          ):
+              lowered = (
+                  text or ''
+              ).lower()
+
+              for (
+                  signal,
+                  keywords
+              ) in NEWS_SIGNALS:
+
+                  for keyword in keywords:
+                      if keyword.lower() in lowered:
+                          return signal
+
+              return None
+
+
+          def article_matches_symbol(
+              article,
+              symbol
+          ):
+              text = (
+                  article.get(
+                      'title',
+                      ''
+                  )
+                  + ' '
+                  +
+                  article.get(
+                      'description',
+                      ''
+                  )
+              ).lower()
+
+              coin_key = (
+                  symbol.replace(
+                      'USDT',
+                      ''
+                  )
+              )
+
+              keywords = NEWS_KEYWORDS.get(
+                  coin_key,
+                  []
+              )
+
+              for keyword in keywords:
+                  if keyword.lower() in text:
+                      return True
+
+              return False
+
+
+          def parse_rss(
+              content,
+              source
+          ):
+              articles = []
+
+              try:
+                  root = ET.fromstring(
+                      content
+                  )
+
+              except Exception as e:
+                  print(
+                      f'RSS parse error '
+                      f'{source}: {e}'
+                  )
+                  return articles
+
+              for item in root.iter():
+                  if item.tag.lower().endswith(
+                      'item'
+                  ):
+
+                      title = ''
+                      description = ''
+                      link = ''
+                      pub_date = None
+
+                      for child in item:
+                          tag = child.tag.lower()
+
+                          if tag.endswith(
+                              'title'
+                          ):
+                              title = clean_text(
+                                  child.text or ''
+                              )
+
+                          elif tag.endswith(
+                              'description'
+                          ):
+                              description = clean_text(
+                                  child.text or ''
+                              )
+
+                          elif tag.endswith(
+                              'link'
+                          ):
+                              link = (
+                                  child.text or ''
+                              ).strip()
+
+                          elif (
+                              tag.endswith(
+                                  'pubdate'
+                              )
+                              or
+                              tag.endswith(
+                                  'published'
+                              )
+                              or
+                              tag.endswith(
+                                  'updated'
+                              )
+                          ):
+                              pub_date = parse_news_date(
+                                  child.text
+                                  or ''
+                              )
+
+                      if title:
+                          articles.append(
+                              {
+                                  'source': source,
+                                  'title': title,
+                                  'description':
+                                      description,
+                                  'link': link,
+                                  'published':
+                                      pub_date,
+                              }
+                          )
+
+              return articles
+
+
+          def collect_rss_news():
+              all_articles = []
+
+              for (
+                  source,
+                  url
+              ) in NEWS_FEEDS:
+
+                  try:
+                      content = http_get_text(
+                          url,
+                          timeout=NEWS_TIMEOUT
+                      )
+
+                      articles = parse_rss(
+                          content,
+                          source
+                      )
+
+                      all_articles.extend(
+                          articles
+                      )
+
+                  except Exception as e:
+                      print(
+                          f'News feed error '
+                          f'{source}: {e}'
+                      )
+
+              return all_articles
+
+
+          def collect_crypto_ru_news():
+              articles = []
+
+              try:
+                  content = http_get_text(
+                      CRYPTO_RU_NEWS_URL,
+                      timeout=NEWS_TIMEOUT
+                  )
+
+                  text = content.decode(
+                      'utf-8',
+                      errors='ignore'
+                  )
+
+                  pattern = re.compile(
+                      r'<a[^>]+href=["\']([^"\']+)["\'][^>]*>'
+                      r'(.*?)</a>',
+                      re.IGNORECASE |
+                      re.DOTALL
+                  )
+
+                  for match in pattern.finditer(
+                      text
+                  ):
+                      link = match.group(
+                          1
+                      )
+
+                      title = clean_text(
+                          match.group(
+                              2
+                          )
+                      )
+
+                      if not title:
+                          continue
+
+                      if link.startswith('/'):
+                          link = (
+                              'https://crypto.ru'
+                              + link
+                          )
+
+                      if (
+                          'crypto.ru'
+                          not in link
+                      ):
+                          continue
+
+                      articles.append(
+                          {
+                              'source':
+                                  'Crypto.ru',
+                              'title':
+                                  title,
+                              'description':
+                                  '',
+                              'link':
+                                  link,
+                              'published':
+                                  None,
+                          }
+                      )
+
+              except Exception as e:
+                  print(
+                      f'Crypto.ru error: '
+                      f'{e}'
+                  )
+
+              return articles
+
+
+          def collect_news():
+              now = datetime.now(
+                  timezone.utc
+              )
+
+              cutoff = (
+                  now -
+                  timedelta(
+                      hours=
+                      NEWS_LOOKBACK_HOURS
+                  )
+              )
+
+              articles = (
+                  collect_rss_news()
+              )
+
+              articles.extend(
+                  collect_crypto_ru_news()
+              )
+
+              context = {}
+
+              seen = set()
+
+              for article in articles:
+
+                  title = article.get(
+                      'title',
+                      ''
+                  )
+
+                  link = article.get(
+                      'link',
+                      ''
+                  )
+
+                  unique = (
+                      title.lower(),
+                      link.lower()
+                  )
+
+                  if unique in seen:
+                      continue
+
+                  seen.add(
+                      unique
+                  )
+
+                  published = article.get(
+                      'published'
+                  )
+
+                  if (
+                      published
+                      and
+                      published < cutoff
+                  ):
+                      continue
+
+                  text = (
+                      title
+                      + ' '
+                      +
+                      article.get(
+                          'description',
+                          ''
+                      )
+                  )
+
+                  signal = (
+                      detect_news_signal(
+                          text
+                      )
+                  )
+
+                  if not signal:
+                      continue
+
+                  article['signal'] = signal
+
+                  for symbol in SYMBOLS:
+
+                      if article_matches_symbol(
+                          article,
+                          symbol
+                      ):
+
+                          context.setdefault(
+                              symbol,
+                              []
+                          ).append(
+                              article
+                          )
+
+              for symbol in context:
+                  context[symbol].sort(
+                      key=lambda article:
+                          article.get(
+                              'published'
+                          )
+                          or
+                          datetime.min.replace(
+                              tzinfo=timezone.utc
+                          ),
+                      reverse=True
+                  )
+
+              return context
+
+
+          def format_news_line(
+              article
+          ):
+              signal = article.get(
+                  'signal',
+                  '📰 NEWS'
+              )
+
+              title = article.get(
+                  'title',
+                  'Без заголовка'
+              )
+
+              source = article.get(
+                  'source',
+                  ''
+              )
+
+              link = article.get(
+                  'link',
+                  ''
+              )
+
+              message = (
+                  f'{signal}\n'
+                  f'📰 {title}\n'
+                  f'Источник: {source}'
+              )
+
+              if link:
+                  message += (
+                      '\n'
+                      + link
+                  )
+
+              return message
 
 
           # ============================================================
-          # PRICE ALERT MESSAGE
+          # PRICE MESSAGE
           # ============================================================
 
           def send_price_alert(
@@ -1634,11 +1639,22 @@ jobs:
               news_article=None,
               signal_type='PRICE'
           ):
+              price = market[
+                  'price'
+              ]
+
               direction = (
-                  'UP'
+                  '📈'
                   if change > 0
                   else
-                  'DOWN'
+                  '📉'
+              )
+
+              signal_strength = (
+                  calculate_signal_strength(
+                      price_alerts,
+                      news_article
+                  )
               )
 
               fingerprint = (
@@ -1649,125 +1665,57 @@ jobs:
                   f'{direction}'
               )
 
-              if not should_send_alert(
+              if alert_already_sent(
                   state,
                   fingerprint
               ):
                   return False
 
-              price = market[
-                  'price'
-              ]
-
-              strength = (
-                  calculate_signal_strength(
-                      level,
-                      price_alerts,
-                      news_article
-                  )
-              )
-
-              snapshot = (
-                  format_price_snapshot(
-                      market
-                  )
-              )
-
-              if news_article:
-                  title = (
-                      '🔴 HIGH SIGNAL'
-                  )
-
-                  reasons = (
-                      '📈 Резкое движение цены\n'
-                      '📰 Свежая фундаментальная новость'
-                  )
-
-                  actual_signal_type = (
-                      'PRICE_NEWS'
-                  )
-
-              else:
-                  if level == 'EXTREME':
-                      title = (
-                          '🚨 EXTREME MOVE'
-                      )
-
-                  elif level == 'VERY STRONG':
-                      title = (
-                          '🔴 VERY STRONG MOVE'
-                      )
-
-                  elif level == 'STRONG':
-                      title = (
-                          '🔴 STRONG MOVE'
-                      )
-
-                  else:
-                      title = (
-                          '🟠 SHARP MOVE'
-                      )
-
-                  direction_text = (
-                      '📈 Рост'
-                      if change > 0
-                      else
-                      '📉 Падение'
-                  )
-
-                  reasons = (
-                      direction_text
-                      + '\n'
-                      +
-                      f'⏱ Основной сигнал: '
-                      f'{period}'
-                  )
-
-                  actual_signal_type = (
-                      'PRICE'
-                  )
-
               message = (
-                  f'{title}\n\n'
-                  f'🪙 {symbol}\n'
-                  f'💰 Price: {price:.10g}\n\n'
+                  f'{direction} '
+                  f'{symbol}\n\n'
+                  f'💰 Цена: '
+                  f'{price:.10g}\n\n'
+                  f'5m: '
+                  f'{market["change_5"]:+.2f}%\n'
+                  f'15m: '
+                  f'{market["change_15"]:+.2f}%\n'
+                  f'30m: '
+                  f'{market["change_30"]:+.2f}%\n'
+                  f'45m: '
+                  f'{market["change_45"]:+.2f}%\n'
+                  f'60m: '
+                  f'{market["change_60"]:+.2f}%\n\n'
+                  f'🟠 {level} MOVE\n'
                   f'🔥 Сила сигнала: '
-                  f'{strength}\n\n'
-                  f'Основной сигнал:\n'
-                  f'⏱ {period}: '
-                  f'{change:+.2f}%\n\n'
-                  f'Изменение цены:\n'
-                  f'{snapshot}\n\n'
-                  f'{reasons}'
+                  f'{signal_strength}\n'
+                  f'⏱ Период: {period}'
               )
 
               if news_article:
+
                   message += (
-                      '\n\n📰 Причина:\n'
+                      '\n\n'
+                      '📰 Фундаментальный фактор:\n'
                       +
-                      news_article.get(
-                          'title',
-                          ''
-                      )
-                      +
-                      '\n\nИсточник: '
-                      +
-                      news_article.get(
-                          'source',
-                          'News'
+                      format_news_line(
+                          news_article
                       )
                   )
 
-                  link = news_article.get(
-                      'link',
-                      ''
+              link = (
+                  news_article.get(
+                      'link'
                   )
+                  if news_article
+                  else None
+              )
 
-                  if link:
-                      message += (
-                          '\n'
-                          + link
-                      )
+              if link:
+                  message += (
+                      '\n'
+                      + link
+                  )
 
               message += (
                   '\n\nBitget Spot'
@@ -1784,9 +1732,10 @@ jobs:
                   )
 
                   if success:
+
                       actual_fingerprint = (
                           f'{symbol}:'
-                          f'{actual_signal_type}:'
+                          f'{signal_type}:'
                           f'{level}:'
                           f'{period}:'
                           f'{direction}'
@@ -1843,7 +1792,8 @@ jobs:
 
                   if (
                       news_sent
-                      >= MAX_NEWS_ALERTS_PER_RUN
+                      >=
+                      MAX_NEWS_ALERTS_PER_RUN
                   ):
                       break
 
@@ -1854,7 +1804,8 @@ jobs:
 
                       if (
                           news_sent
-                          >= MAX_NEWS_ALERTS_PER_RUN
+                          >=
+                          MAX_NEWS_ALERTS_PER_RUN
                       ):
                           break
 
@@ -2035,6 +1986,10 @@ jobs:
                       'change_60'
                   ]
 
+                  market_time = market[
+                      'market_time'
+                  ]
+
                   print(
                       f'{symbol}: '
                       f'price={price:.10g} '
@@ -2042,7 +1997,8 @@ jobs:
                       f'15m={change_15:+.2f}% '
                       f'30m={change_30:+.2f}% '
                       f'45m={change_45:+.2f}% '
-                      f'60m={change_60:+.2f}%'
+                      f'60m={change_60:+.2f}% '
+                      f'UTC={market_time.strftime("%Y-%m-%d %H:%M:%S")}'
                   )
 
                   price_alerts = (
