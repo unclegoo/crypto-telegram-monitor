@@ -11,12 +11,18 @@
     },
     "PYTHUSDT:VOLUME:60m:UP": {
       "sent_at": "2026-09-06T03:49:44.392153+00:00"
+    },
+    "JUPUSDT:SHARP:60m:UP": {
+      "sent_at": "2026-09-06T07:17:39.176691+00:00"
     }
   },
   "news": {
     "6212251e3919b2354b8c258303ecf8a4f0851e9c784ce3288bb94ed7a03a5e18": {
       "sent_at": "2026-09-05T18:16:54.562044+00:00",
       "title": "Why crypto experts say buying and holding bitcoin easily beats trying to time the market"
+    },
+    "dec4d1945a3f25a8ac54eedd92bbe5448439e51ac1a349efbf7fce77fb5dda01": {
+      "sent_at": "2026-09-06T07:17:47.624895+00:00"
     }
   }
 }
