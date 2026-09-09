@@ -9,6 +9,9 @@ on:
         default: false
         type: boolean
 
+  repository_dispatch:
+    types: [check_prices]
+
   schedule:
     - cron: "*/5 * * * *"
 
@@ -32,6 +35,7 @@ jobs:
       - name: Crypto monitor
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           TEST_TELEGRAM: ${{ inputs.test_telegram }}
         run: |
           python3 << 'PY'
@@ -43,10 +47,12 @@ jobs:
           import urllib.parse
           import xml.etree.ElementTree as ET
           import hashlib
+          from concurrent.futures import ThreadPoolExecutor, as_completed
           from datetime import datetime, timezone, timedelta
           from email.utils import parsedate_to_datetime
 
           TELEGRAM_BOT_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN', '')
+          TELEGRAM_CHAT_ID = os.environ.get('TELEGRAM_CHAT_ID', '').strip()
           TEST_TELEGRAM = os.environ.get('TEST_TELEGRAM', '').lower() == 'true'
 
           STATE_FILE = '.crypto_monitor_state.json'
@@ -80,6 +86,7 @@ jobs:
           MAX_NEWS_ALERTS_PER_RUN = 3
           NEWS_TIMEOUT = 20
           ALERT_COOLDOWN_MINUTES = 60
+          MAX_WORKERS = 10
 
           # ============================================================
           # PRICE ALERT LEVELS
@@ -465,7 +472,7 @@ jobs:
                   )
 
 
-          def get_chat_id():
+          def get_chat_id_via_updates():
               result = telegram_api('getUpdates')
               updates = result.get('result', [])
 
@@ -485,16 +492,30 @@ jobs:
               return None
 
 
-          def send_telegram(text):
-              chat_id = get_chat_id()
+          def resolve_chat_id():
+              # Preferred: explicit secret, no extra API round trip.
+              if TELEGRAM_CHAT_ID:
+                  return TELEGRAM_CHAT_ID
+
+              # Fallback: legacy lookup via getUpdates.
+              chat_id = get_chat_id_via_updates()
 
               if chat_id is None:
                   print(
                       'Telegram chat ID not found.'
                   )
                   print(
-                      'Send /start to the bot first.'
+                      'Set TELEGRAM_CHAT_ID secret, '
+                      'or send /start to the bot first.'
                   )
+
+              return chat_id
+
+
+          def send_telegram(text):
+              chat_id = resolve_chat_id()
+
+              if chat_id is None:
                   return False
 
               result = telegram_api(
@@ -787,7 +808,7 @@ jobs:
                       'category': 'SPOT',
                       'symbol': symbol,
                       'interval': '1m',
-                      'limit': 80,
+                      'limit': 65,
                   },
                   timeout=20
               )
@@ -916,41 +937,53 @@ jobs:
                   'historical_times': {},
               }
 
+              # Each period is computed independently so a single
+              # missing/incomplete candle (e.g. new listing without
+              # 60m of history) doesn't wipe out the other periods.
               for minutes in periods:
-                  target_time = (
-                      now -
-                      timedelta(
-                          minutes=minutes
+                  try:
+                      target_time = (
+                          now -
+                          timedelta(
+                              minutes=minutes
+                          )
                       )
-                  )
 
-                  historical_time, historical_close = (
-                      get_historical_close(
-                          candles,
-                          target_time
+                      historical_time, historical_close = (
+                          get_historical_close(
+                              candles,
+                              target_time
+                          )
                       )
-                  )
 
-                  change = (
-                      (
-                          price -
+                      change = (
+                          (
+                              price -
+                              historical_close
+                          )
+                          /
                           historical_close
+                          *
+                          100
                       )
-                      /
-                      historical_close
-                      *
-                      100
-                  )
 
-                  result[
-                      f'change_{minutes}'
-                  ] = change
+                      result[
+                          f'change_{minutes}'
+                      ] = change
 
-                  result[
-                      'historical_times'
-                  ][minutes] = (
-                      historical_time
-                  )
+                      result[
+                          'historical_times'
+                      ][minutes] = (
+                          historical_time
+                      )
+
+                  except Exception as e:
+                      print(
+                          f'{symbol}: no data for '
+                          f'{minutes}m period ({e})'
+                      )
+
+                      result[f'change_{minutes}'] = None
 
               return result
 
@@ -1041,6 +1074,10 @@ jobs:
                   very_strong,
                   extreme
               ) in levels:
+
+                  # Skip periods where data was unavailable.
+                  if change is None:
+                      continue
 
                   level = get_level(
                       change,
@@ -1278,7 +1315,11 @@ jobs:
               )
 
               for keyword in keywords:
-                  if keyword.lower() in text:
+                  # Word-boundary match to avoid false positives from
+                  # short tokens like "arb", "etc", "gram", "zk", "ban".
+                  pattern = r'\b' + re.escape(keyword.lower()) + r'\b'
+
+                  if re.search(pattern, text):
                       return True
 
               return False
@@ -1671,21 +1712,26 @@ jobs:
               ):
                   return False
 
+              def fmt_change(value):
+                  if value is None:
+                      return 'н/д'
+                  return f'{value:+.2f}%'
+
               message = (
                   f'{direction} '
                   f'{symbol}\n\n'
                   f'💰 Цена: '
                   f'{price:.10g}\n\n'
                   f'5m: '
-                  f'{market["change_5"]:+.2f}%\n'
+                  f'{fmt_change(market["change_5"])}\n'
                   f'15m: '
-                  f'{market["change_15"]:+.2f}%\n'
+                  f'{fmt_change(market["change_15"])}\n'
                   f'30m: '
-                  f'{market["change_30"]:+.2f}%\n'
+                  f'{fmt_change(market["change_30"])}\n'
                   f'45m: '
-                  f'{market["change_45"]:+.2f}%\n'
+                  f'{fmt_change(market["change_45"])}\n'
                   f'60m: '
-                  f'{market["change_60"]:+.2f}%\n\n'
+                  f'{fmt_change(market["change_60"])}\n\n'
                   f'🟠 {level} MOVE\n'
                   f'🔥 Сила сигнала: '
                   f'{signal_strength}\n'
@@ -1733,27 +1779,10 @@ jobs:
 
                   if success:
 
-                      actual_fingerprint = (
-                          f'{symbol}:'
-                          f'{signal_type}:'
-                          f'{level}:'
-                          f'{period}:'
-                          f'{direction}'
-                      )
-
                       mark_alert_sent(
                           state,
-                          actual_fingerprint
+                          fingerprint
                       )
-
-                      if (
-                          actual_fingerprint
-                          != fingerprint
-                      ):
-                          mark_alert_sent(
-                              state,
-                              fingerprint
-                          )
 
                       if news_article:
                           fp = news_fingerprint(
@@ -1909,12 +1938,6 @@ jobs:
 
           state = load_state()
 
-          # ------------------------------------------------------------
-          # FIRST: collect news
-          # ------------------------------------------------------------
-
-          news_context = collect_news()
-
           alerts_sent = 0
 
           combined_news = set()
@@ -1942,62 +1965,109 @@ jobs:
           )
 
           print(
-              'Price + News'
+              'Price + News (parallel fetch)'
           )
 
           print(
               '=' * 75
           )
 
+          # ------------------------------------------------------------
+          # Launch price checks AND news collection concurrently.
+          # News no longer blocks the start of price checks.
+          # ------------------------------------------------------------
+
+          news_context = {}
+
+          with ThreadPoolExecutor(
+              max_workers=MAX_WORKERS
+          ) as pool:
+
+              news_future = pool.submit(
+                  collect_news
+              )
+
+              market_futures = {
+                  pool.submit(
+                      calculate_market,
+                      symbol
+                  ): symbol
+                  for symbol in SYMBOLS
+              }
+
+              markets = {}
+
+              for future in as_completed(
+                  market_futures
+              ):
+
+                  symbol = market_futures[
+                      future
+                  ]
+
+                  try:
+                      markets[symbol] = (
+                          future.result()
+                      )
+
+                  except Exception as e:
+                      print(
+                          f'ERROR {symbol}: '
+                          f'{e}'
+                      )
+
+              try:
+                  news_context = (
+                      news_future.result()
+                  )
+
+              except Exception as e:
+                  print(
+                      f'NEWS COLLECT ERROR: '
+                      f'{e}'
+                  )
+
+                  news_context = {}
+
 
           # ============================================================
-          # MARKET LOOP
+          # PROCESS RESULTS (fixed symbol order for stable logs)
           # ============================================================
 
           for symbol in SYMBOLS:
 
-              try:
+              market = markets.get(
+                  symbol
+              )
 
-                  market = calculate_market(
-                      symbol
-                  )
+              if market is None:
+                  continue
+
+              try:
 
                   price = market[
                       'price'
-                  ]
-
-                  change_5 = market[
-                      'change_5'
-                  ]
-
-                  change_15 = market[
-                      'change_15'
-                  ]
-
-                  change_30 = market[
-                      'change_30'
-                  ]
-
-                  change_45 = market[
-                      'change_45'
-                  ]
-
-                  change_60 = market[
-                      'change_60'
                   ]
 
                   market_time = market[
                       'market_time'
                   ]
 
+                  def fmt(v):
+                      return (
+                          f'{v:+.2f}%'
+                          if v is not None
+                          else 'н/д'
+                      )
+
                   print(
                       f'{symbol}: '
                       f'price={price:.10g} '
-                      f'5m={change_5:+.2f}% '
-                      f'15m={change_15:+.2f}% '
-                      f'30m={change_30:+.2f}% '
-                      f'45m={change_45:+.2f}% '
-                      f'60m={change_60:+.2f}% '
+                      f'5m={fmt(market["change_5"])} '
+                      f'15m={fmt(market["change_15"])} '
+                      f'30m={fmt(market["change_30"])} '
+                      f'45m={fmt(market["change_45"])} '
+                      f'60m={fmt(market["change_60"])} '
                       f'UTC={market_time.strftime("%Y-%m-%d %H:%M:%S")}'
                   )
 
